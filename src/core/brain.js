@@ -330,7 +330,11 @@ Responde únicamente con un objeto JSON:
     let parsedAction = null;
     try {
       parsedAction = parseCarmencitaAction(JSON.parse(jsonMatch[0]));
-      cleanText = rawText.replace(jsonMatch[0], '').trim();
+      cleanText = rawText
+        .replace(/```(?:json)?\s*\{[\s\S]*?"action"[\s\S]*?\}\s*```/gi, '')
+        .replace(/\{[\s\S]*?"action"[\s\S]*?\}/gi, '')
+        .replace(/```(?:json)?\s*```/gi, '')
+        .trim();
     } catch (e) {
       console.warn('[Brain] JSON de acción inválido:', e.message);
     }
@@ -395,8 +399,9 @@ Responde únicamente con un objeto JSON:
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-      const report = `⚙️ <b>Reporte de terminal:</b>\n\n<pre>${escapedOutput}</pre>`;
-      const fullHistory = `${initialAck}\n\n⚙️ Reporte de terminal:\n${agyResult.output}`;
+      const modeLabel = agyResult.mode ? ` (${agyResult.mode})` : '';
+      const report = `⚙️ <b>Reporte de terminal${modeLabel}:</b>\n\n<pre>${escapedOutput}</pre>`;
+      const fullHistory = `${initialAck}\n\n⚙️ Reporte de terminal${modeLabel}:\n${agyResult.output}`;
 
       return makeActionResult({
         reply: progressSent ? report : `${initialAck}\n\n${report}`,

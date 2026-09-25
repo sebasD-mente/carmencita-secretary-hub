@@ -17,6 +17,7 @@ import { WhatsAppAdapter } from '../src/adapters/whatsapp.js';
 import { registerRoutes } from '../src/routes/webhooks.js';
 import { setPrismaClient } from '../src/core/prisma.js';
 import { runMigration } from '../scripts/migrate-json-to-prisma.js';
+import { AgyBridge } from '../src/core/agy-bridge.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -561,6 +562,32 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     } finally {
       console.log = origLog;
     }
+  });
+
+  await t.test('9. AgyBridge: Fallback automático a Shell nativo cuando AGY no está en el PATH y limpieza de markdown', async () => {
+    // 1. Verificar limpieza de fences markdown ```json ... ```
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    const modelOutputWithFences = `¡Entendido, Sebastián! Consulto los parámetros del sistema.
+
+\`\`\`json
+{"action": "RUN_AGY_TASK", "prompt": "echo OK"}
+\`\`\``;
+    const res = await brain._executeExtractedActions(modelOutputWithFences);
+    assert.ok(!res.reply.includes('```json'));
+    assert.ok(!res.reply.includes('```'));
+    assert.ok(res.reply.includes('¡Entendido, Sebastián! Consulto los parámetros del sistema.'));
+
+    // 2. Verificar que AgyBridge con un binario inexistente cae en Shell nativo
+    const agyBridgeFallback = new AgyBridge('non_existent_binary_xyz_123');
+    const result = await agyBridgeFallback.executeTask('echo TEST_FALLBACK_OK');
+    assert.equal(result.success, true);
+    assert.ok(result.output.includes('TEST_FALLBACK_OK'));
   });
 
   // Limpieza final
