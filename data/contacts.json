@@ -1,0 +1,12 @@
+{
+  "contacts": [
+    {
+      "id": "contact_sebas",
+      "name": "Sebastián Jiménez",
+      "role": "Jefe / Fundador",
+      "phone": "",
+      "telegramId": "",
+      "relationship": "owner"
+    }
+  ]
+}

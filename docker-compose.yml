@@ -1,0 +1,41 @@
+services:
+  carmencita-db:
+    image: postgres:16-alpine
+    container_name: carmencita_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: carmencita_db
+      POSTGRES_USER: carmencita_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-carmencita_secure_pass_2026}
+    volumes:
+      - carmencita_db_data:/var/lib/postgresql/data
+    networks:
+      - carmencita_net
+
+  carmencita-hub:
+    build: .
+    container_name: carmencita_hub
+    restart: always
+    depends_on:
+      - carmencita-db
+    environment:
+      NODE_ENV: production
+      PORT: 3050
+      DATABASE_URL: postgresql://carmencita_user:${DB_PASSWORD:-carmencita_secure_pass_2026}@carmencita-db:5432/carmencita_db?schema=public
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    volumes:
+      - carmencita_vault:/app/data
+    ports:
+      - "3050:3050"
+    networks:
+      - carmencita_net
+
+networks:
+  carmencita_net:
+    driver: bridge
+
+volumes:
+  carmencita_db_data:
+  carmencita_vault:

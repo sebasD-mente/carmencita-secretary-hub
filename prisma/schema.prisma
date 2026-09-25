@@ -1,0 +1,119 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. Mensajería y Auditoría Omnicanal
+model MessageLog {
+  id          String   @id @default(uuid())
+  channel     String   // "telegram" | "whatsapp" | "email"
+  senderId    String
+  senderName  String
+  role        String   // "user" | "assistant"
+  content     String   @db.Text
+  rawAction   Json?
+  createdAt   DateTime @default(now())
+
+  @@index([senderId, createdAt])
+}
+
+// 2. Bóveda Universal de Documentos
+model Document {
+  id           String           @id @default(uuid())
+  fileName     String
+  originalName String
+  mimeType     String
+  category     DocumentCategory @default(GENERAL)
+  filePath     String           // Ruta persistente en disco/volumen
+  fileSize     Int
+  summary      String?          @db.Text
+  tags         String[]
+  metadata     Json?            // OCR extraído, datos estructurados
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  invoice      Invoice?
+
+  @@index([category, createdAt])
+}
+
+enum DocumentCategory {
+  FACTURA
+  CONTRATO
+  COTIZACION
+  HOJA_CALCULO
+  IDENTIFICACION
+  PROYECTO_BRIEF
+  GENERAL
+}
+
+// 3. Facturas y Garantías
+model Invoice {
+  id             String    @id @default(uuid())
+  documentId     String    @unique
+  document       Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  vendor         String
+  item           String
+  totalAmount    Decimal   @db.Decimal(10, 2)
+  currency       String    @default("GTQ")
+  purchaseDate   DateTime?
+  warrantyMonths Int?      @default(0)
+  warrantyUntil  DateTime?
+  isExpense      Boolean   @default(true)
+  notes          String?   @db.Text
+
+  @@index([vendor])
+  @@index([warrantyUntil])
+}
+
+// 4. Agenda y Tareas
+model Task {
+  id          String     @id @default(uuid())
+  description String     @db.Text
+  dueDate     DateTime?
+  priority    Priority   @default(MEDIA)
+  status      TaskStatus @default(PENDIENTE)
+  createdAt   DateTime   @default(now())
+  completedAt DateTime?
+
+  @@index([status, dueDate])
+}
+
+enum TaskStatus {
+  PENDIENTE
+  EN_PROGRESO
+  COMPLETADA
+  CANCELADA
+}
+
+enum Priority {
+  ALTA
+  MEDIA
+  BAJA
+}
+
+// 5. Banco de Ideas
+model Idea {
+  id        String   @id @default(uuid())
+  title     String
+  summary   String   @db.Text
+  rawText   String   @db.Text
+  priority  Priority @default(MEDIA)
+  tags      String[]
+  createdAt DateTime @default(now())
+}
+
+// 6. Agenda de Contactos
+model Contact {
+  id        String   @id @default(uuid())
+  name      String
+  role      String?
+  phone     String?  @unique
+  email     String?  @unique
+  company   String?
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+}

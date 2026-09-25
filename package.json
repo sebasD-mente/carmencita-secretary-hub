@@ -1,0 +1,39 @@
+{
+  "name": "carmencita-secretary-hub",
+  "version": "1.0.0",
+  "description": "Carmencita 24/7 Autonomous Omnichannel AI Secretary Hub (Telegram, WhatsApp, Email, AGY)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test --test-concurrency=1"
+  },
+  "keywords": [
+    "antigravity",
+    "agy",
+    "ai-secretary",
+    "telegram-bot",
+    "evolution-api",
+    "whatsapp",
+    "omnichannel"
+  ],
+  "author": "Deko Labs",
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/multipart": "^9.0.3",
+    "@google/genai": "^2.24.0",
+    "@prisma/client": "^6.4.1",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.2.1",
+    "grammy": "^1.35.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "prisma": "^6.4.1"
+  }
+}

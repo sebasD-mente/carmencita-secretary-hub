@@ -1,0 +1,8 @@
+node_modules/
+.env
+data_test/
+*.log
+data/facturas/*
+!data/facturas/.gitkeep
+data/documentos/*
+!data/documentos/.gitkeep
