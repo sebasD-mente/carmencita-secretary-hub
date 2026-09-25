@@ -590,6 +590,126 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(result.output.includes('TEST_FALLBACK_OK'));
   });
 
+  await t.test('10. Arquitectura de Cerebro Dual: Modo Creativo & Estratégico sin Bloqueos', async () => {
+    let capturedInstruction = null;
+    let capturedPrompt = null;
+
+    const mockAiCreative = {
+      models: {
+        generateContent: async ({ config, contents }) => {
+          capturedInstruction = config?.systemInstruction;
+          capturedPrompt = contents[0];
+          return {
+            text: `¡Por supuesto, Sebastián! Aquí tienes 3 propuestas conceptuales para iluminar el stand vintage:
+
+1. **Lámparas Edison con Filamento Expuesto:** Suspendidas con poleas de hierro rústico para crear calidez focal.
+2. **Guirnaldas Cálidas Ocultas en Vigas:** Proyectan iluminación envolvente sin deslumbrar.
+3. **Reflectores Direccionales de Bronce Envejecido:** Ideales para destacar las piezas protagónicas.
+
+¿Deseas que profundice en los materiales o guarde alguna en el banco de ideas?`,
+          };
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      ai: mockAiCreative,
+    });
+
+    // Validar directivas en el System Prompt
+    const systemPrompt = brain.getSystemPrompt();
+    assert.ok(systemPrompt.includes('ARQUITECTURA DE CEREBRO DUAL'));
+    assert.ok(systemPrompt.includes('MODO CREATIVO & ESTRATÉGICO (DESATADO)'));
+    assert.ok(systemPrompt.includes('Cero restricciones factuales'));
+
+    // Ejecución de consulta creativa
+    const result = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '123456',
+      senderName: 'Sebastián',
+      text: 'Dame 3 ideas creativas para iluminar el stand vintage',
+    });
+
+    assert.ok(capturedPrompt.includes('Dame 3 ideas creativas para iluminar el stand vintage'));
+    assert.ok(capturedInstruction.includes('MODO CREATIVO & ESTRATÉGICO'));
+    assert.ok(result.reply.includes('Lámparas Edison con Filamento Expuesto'));
+    assert.ok(result.reply.includes('Reflectores Direccionales'));
+  });
+
+  await t.test('11. Arquitectura de Cerebro Dual: Modo Factual / Anti-Alucinación y Veracidad Constructiva en Excel', async () => {
+    const mockAiFactual = {
+      models: {
+        generateContent: async () => {
+          return {
+            text: `Sebastián, no tengo registrado el costo de los ítems de feria en la base de datos ni en tus archivos. Te armé la estructura completa con las fórmulas listas; si me pasas la cotización o me dices los montos reales, te la cuadro y actualizo al instante.
+
+{"action": "GENERATE_EXCEL", "title": "Presupuesto Stand Feria", "sheetName": "Presupuesto", "columns": [{"header": "Concepto", "key": "item", "width": 25}, {"header": "Cantidad", "key": "qty", "width": 12}, {"header": "Costo Unitario (Q)", "key": "unitPrice", "width": 20}, {"header": "Total Estimado (Q)", "key": "total", "width": 20}], "rows": [{"item": "Estructura Stand Madera", "qty": 1, "unitPrice": 0.0, "total": "=B4*C4"}, {"item": "Iluminación Vintage", "qty": 4, "unitPrice": "", "total": "=B5*C5"}, {"item": "Mobiliario Exhibición", "qty": 1, "unitPrice": "[PENDIENTE DE COTIZACIÓN]", "total": 0.0}], "summary": "Plantilla estructurada lista para ingresar costos reales de proveedores."}`,
+          };
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      ai: mockAiFactual,
+    });
+
+    const result = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '123456',
+      senderName: 'Sebastián',
+      text: 'Hazme un Excel de presupuesto para la feria',
+    });
+
+    // 1. Verificación del Protocolo de Veracidad Constructiva en el texto
+    assert.ok(result.reply.includes('no tengo registrado el costo'));
+    assert.ok(result.reply.includes('Te armé la estructura completa con las fórmulas listas'));
+    assert.ok(!result.reply.includes('{"action"'));
+
+    // 2. Verificación de la generación de Excel
+    assert.ok(result.hasExcel, 'Debe marcar hasExcel como true');
+    assert.ok(result.excelFile, 'Debe incluir el archivo excel generado');
+    assert.equal(result.actionData.action, 'GENERATE_EXCEL');
+    assert.equal(
+      result.actionData.summary,
+      'Plantilla estructurada lista para ingresar costos reales de proveedores.'
+    );
+
+    // 3. Inspección forense de la hoja de cálculo con ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(result.excelFile.buffer);
+    const worksheet = workbook.getWorksheet('Presupuesto');
+    assert.ok(worksheet, 'La hoja Presupuesto debe existir');
+
+    // Fila 4: Estructura Stand Madera (unitPrice = 0.0, total = fórmula B4*C4)
+    assert.equal(worksheet.getCell(4, 1).value, 'Estructura Stand Madera');
+    assert.equal(worksheet.getCell(4, 2).value, 1);
+    assert.equal(worksheet.getCell(4, 3).value, 0.0);
+    assert.deepEqual(worksheet.getCell(4, 4).value, { formula: 'B4*C4' });
+
+    // Fila 5: Iluminación Vintage (unitPrice = "", total = fórmula B5*C5)
+    assert.equal(worksheet.getCell(5, 1).value, 'Iluminación Vintage');
+    assert.equal(worksheet.getCell(5, 3).value, '');
+    assert.deepEqual(worksheet.getCell(5, 4).value, { formula: 'B5*C5' });
+
+    // Fila 6: Mobiliario Exhibición (unitPrice = "[PENDIENTE DE COTIZACIÓN]")
+    assert.equal(worksheet.getCell(6, 1).value, 'Mobiliario Exhibición');
+    assert.equal(worksheet.getCell(6, 3).value, '[PENDIENTE DE COTIZACIÓN]');
+
+    // Resumen al pie
+    const footerCell = worksheet.getCell(8, 1);
+    assert.ok(footerCell.value.includes('Plantilla estructurada lista para ingresar costos reales'));
+  });
+
   // Limpieza final
   await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
 });

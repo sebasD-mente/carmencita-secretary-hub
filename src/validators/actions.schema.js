@@ -53,6 +53,7 @@ export const GenerateExcelActionSchema = z.object({
       })
     )
     .min(1, 'Debe especificar al menos una columna'),
+  // Filas del reporte: acepta celdas con números, cadenas ("[PENDIENTE]", ""), null, booleanos o fórmulas
   rows: z.array(z.record(z.string(), z.any())).default([]),
   summary: z.string().optional(),
 });

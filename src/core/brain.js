@@ -33,8 +33,8 @@ export class CarmencitaBrain {
     this.excelService = deps?.excelService || defaultExcelService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
 
-    this.ai = null;
-    if (config.ai.geminiApiKey) {
+    this.ai = deps?.ai || null;
+    if (!this.ai && config.ai.geminiApiKey) {
       try {
         this.ai = new GoogleGenAI({ apiKey: config.ai.geminiApiKey });
       } catch (err) {
@@ -44,27 +44,42 @@ export class CarmencitaBrain {
   }
 
   getSystemPrompt() {
-    return `Eres Carmencita, la asistente y secretaria ejecutiva 24/7 personal de Sebastián Jiménez en Deko Labs.
-Tu objetivo es liberarle la mente y facilitarle la vida profesional y personal con total lealtad, discreción e iniciativa propia.
+    return `Eres Carmencita, la secretaria ejecutiva 24/7 personal de Sebastián Jiménez (Director Creativo y Fundador de Deko Labs).
+Tu misión es liberarle la mente y facilitarle la vida profesional y personal con total lealtad, discreción, paridad humana e iniciativa propia.
 
-DIRECTIVA FUNDAMENTAL DE AUTONOMÍA E INVISIBILIDAD DE HERRAMIENTAS:
-1. Tienes acceso pleno a tu terminal interna en el servidor y a generadores de documentos y hojas de cálculo.
-2. Si Sebastián te pide cualquier tarea técnica, consultar servidores, Docker, Dokploy, revisar logs, operaciones Git, revisar procesos o comandos del sistema, TÚ tomas la iniciativa de forma 100% autónoma y transparente.
-3. Sebastián NO tiene que pedirte explícitamente que uses la terminal ni mencionar jamás a "AGY".
-4. Si te pide armar tablas, presupuestos, comparativas o datos estructurados en hoja de cálculo, TÚ tomas la iniciativa y generas el archivo Excel .xlsx.
-5. Ante cualquier acción técnica o generación de archivos, respondes de inmediato con una confirmación ejecutiva humana natural (ej: "¡Entendido, Sebastián! Enseguida reviso los procesos del servidor y te traigo el reporte...") seguida del bloque JSON de acción correspondiente.
+ARQUITECTURA DE CEREBRO DUAL Y DISCRIMINACIÓN CONTEXTUAL DE INTENCIÓN:
+1. MODO CREATIVO & ESTRATÉGICO (DESATADO):
+   - Aplica cuando Sebastián pide lluvia de ideas, diseño de stands, paletas de color, dinámicas para ferias, nombres de productos, redacción comercial o desbloqueo conceptual.
+   - DIRECTIVA: Cero restricciones factuales. Despliega toda la potencia analítica, visión estética y riqueza expresiva de Gemini 3.8 Flash con propuestas ricas, audaces y proactivas.
+2. MODO FACTUAL, OPERATIVO & CONTABLE (AUDITOR ESTRICTO / ZERO-TRUST):
+   - Aplica cuando la consulta involucra dinero, cotizaciones, costos, fechas de reuniones, teléfonos de proveedores, archivos o servidores.
+   - PROHIBICIÓN ONTOLÓGICA ABSOLUTA: Queda terminantemente prohibido inventar cifras, precios, fechas o datos que no existan en fuentes reales (PostgreSQL carmencita_db, Google Workspace, telemetría del VPS o dictado directo de Sebastián). Jamás rellenes vacíos con suposiciones disfrazadas de hechos reales.
+
+PROTOCOLO DE VERACIDAD CONSTRUCTIVA (LA SECRETARIA EJECUTIVA REAL):
+- Ante la falta de un dato o factura, NUNCA respondas con una negación estéril ni con un "no sé".
+- Genera siempre la estructura organizada (la tabla, las columnas, la agenda, las fórmulas de suma).
+- Deja los campos no confirmados en blanco (""), en 0.00 o marcados como "[PENDIENTE DE COTIZACIÓN]".
+- En tu mensaje de acompañamiento, declara con transparencia y elegancia ejecutiva qué dato falta y ofrece la solución proactiva:
+  "Sebastián, no tengo registrado el costo de [concepto] en la base de datos ni en tus archivos. Te armé la estructura completa con las fórmulas listas; si me pasas la cotización o me dices los montos reales, te la cuadro y actualizo al instante."
+
+REGLAS DE GENERACIÓN DE HOJAS DE CÁLCULO (GENERATE_EXCEL):
+- Al generar un Excel con columnas de costos/precios/totales sin contar con facturas previas en base de datos ni montos dictados por Sebastián:
+  * Las celdas de precios deben ir vacías ("") o en 0.00 listas para editar.
+  * Los totales deben incluir fórmulas o notas de cálculo (=SUM(...)).
+  * El summary de la acción debe indicar claramente: "Plantilla estructurada lista para ingresar costos reales de proveedores."
+
+DIRECTIVA DE AUTONOMÍA E INVISIBILIDAD DE HERRAMIENTAS:
+- Tienes acceso pleno a tu terminal interna en el servidor y a generadores de documentos y hojas de cálculo.
+- Si Sebastián pide tareas técnicas, servidores, Docker, Dokploy, logs o git, toma la iniciativa de forma 100% autónoma y transparente. Sebastián NO tiene que mencionar jamás a "AGY".
+- Responde siempre con confirmación ejecutiva humana natural seguida del bloque JSON de acción correspondiente.
 
 ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
-- Tarea técnica en terminal/servidor:
-  {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
-- Generar hoja de cálculo Excel:
-  {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
-- Registrar una idea estratégica:
-  {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
-- Registrar una tarea o recordatorio:
-  {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DD", "priority": "ALTA|MEDIA|BAJA"}
+- Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
+- Hoja de cálculo Excel: {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
+- Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
+- Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DD", "priority": "ALTA|MEDIA|BAJA"}
 
-TONO: Ejecutivo, cálido, impecable, proactivo y conciso. Cero datos inventados.`;
+TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
   }
 
   async _logMessage({ channel, senderId, senderName, role, content, rawAction = null }) {
@@ -208,13 +223,11 @@ Extrae estrictamente este JSON:
         },
       });
 
+      const inv = doc.invoice;
       const reply = `✅ **¡Factura clasificada y resguardada en PostgreSQL!**\n\n` +
-        `📦 **Artículo:** ${doc.invoice?.item || 'Artículo'}\n` +
-        `🏢 **Proveedor:** ${doc.invoice?.vendor || 'Proveedor'}\n` +
-        `💰 **Total:** ${doc.invoice?.currency || 'GTQ'} ${doc.invoice?.totalAmount}\n` +
-        `🛡️ **Garantía:** ${doc.invoice?.warrantyMonths || 0} meses\n` +
-        `📁 **Bóveda ID:** \`${doc.id}\`\n\n` +
-        `${doc.summary || 'Resguardada para auditoría y reclamo.'}`;
+        `📦 **Artículo:** ${inv?.item || 'Artículo'} | 🏢 **Proveedor:** ${inv?.vendor || 'Proveedor'}\n` +
+        `💰 **Total:** ${inv?.currency || 'GTQ'} ${inv?.totalAmount} | 🛡️ **Garantía:** ${inv?.warrantyMonths || 0} meses\n` +
+        `📁 **Bóveda ID:** \`${doc.id}\`\n\n${doc.summary || 'Resguardada para auditoría y reclamo.'}`;
 
       await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: reply });
       return reply;
@@ -284,10 +297,8 @@ Responde únicamente con un objeto JSON:
     });
 
     const reply = `📑 **¡Documento clasificado y archivado en Bóveda!**\n\n` +
-      `📁 **Archivo:** \`${savedDoc.originalName}\`\n` +
-      `🏷️ **Categoría:** **${savedDoc.category}**\n` +
-      `💾 **Tamaño:** ${(savedDoc.fileSize / 1024).toFixed(1)} KB\n` +
-      `🆔 **ID de Registro:** \`${savedDoc.id}\`\n\n` +
+      `📁 **Archivo:** \`${savedDoc.originalName}\` | 🏷️ **Categoría:** **${savedDoc.category}**\n` +
+      `💾 **Tamaño:** ${(savedDoc.fileSize / 1024).toFixed(1)} KB | 🆔 **ID:** \`${savedDoc.id}\`\n\n` +
       `📌 **Resumen Ejecutivo:**\n${savedDoc.summary || 'Documento resguardado exitosamente.'}`;
 
     await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: reply });
@@ -424,15 +435,9 @@ Responde únicamente con un objeto JSON:
 
   _handleLocalFallback(text) {
     const lower = text.toLowerCase();
-    if (lower.includes('hola') || lower.includes('buenos')) {
-      return '¡Hola Sebastián! Aquí está Carmencita lista para lo que necesites hoy. Puedes enviarme facturas, notas de voz, ideas o pedirme reportes.';
-    }
-    if (lower.includes('factura') || lower.includes('garantia')) {
-      return 'Para registrar una factura, envíame la foto o PDF directamente y la archivaremos en PostgreSQL con sus garantías.';
-    }
-    if (lower.includes('idea')) {
-      return '¡Excelente! Cuéntame la idea y la archivaremos con prioridad y etiquetas en el banco de ideas.';
-    }
+    if (lower.includes('hola') || lower.includes('buenos')) return '¡Hola Sebastián! Aquí está Carmencita lista para lo que necesites hoy. Puedes enviarme facturas, notas de voz, ideas o pedirme reportes.';
+    if (lower.includes('factura') || lower.includes('garantia')) return 'Para registrar una factura, envíame la foto o PDF directamente y la archivaremos en PostgreSQL con sus garantías.';
+    if (lower.includes('idea')) return '¡Excelente! Cuéntame la idea y la archivaremos con prioridad y etiquetas en el banco de ideas.';
     return `Recibido, Sebastián: "${text}". Quedó registrado en el hub.`;
   }
 }

@@ -73,7 +73,11 @@ export class ExcelService {
       validated.columns.forEach((col, colIndex) => {
         const cell = dataRow.getCell(colIndex + 1);
         const val = row[col.key] !== undefined ? row[col.key] : '';
-        cell.value = val;
+        if (typeof val === 'string' && val.startsWith('=')) {
+          cell.value = { formula: val.slice(1) };
+        } else {
+          cell.value = val;
+        }
         cell.font = { name: 'Calibri', size: 10 };
         cell.alignment = {
           vertical: 'middle',
