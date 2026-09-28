@@ -103,7 +103,7 @@ export class TelegramAdapter {
         `📊 <b>Hojas de Cálculo:</b> Pídeme tablas, presupuestos o listas y generaré archivos .xlsx reales.\n` +
         `💡 <b>Ideas & Tareas:</b> Guarda proyectos y pendientes en PostgreSQL con transacciones ACID.\n` +
         `⚡ <b>Terminal Autónoma:</b> Ejecuto diagnósticos de servidor sin comandos rígidos.\n\n` +
-        `<b>Comandos:</b> /facturas, /documentos, /ideas, /tareas, /mi_id`
+        `<b>Comandos:</b> /agenda, /tareas, /contactos, /facturas, /documentos, /ideas, /mi_id`
       );
     });
 
@@ -177,6 +177,70 @@ export class TelegramAdapter {
         await this._safeReply(ctx, msg);
       } catch (err) {
         await ctx.reply(`Error consultando tareas: ${err.message}`);
+      }
+    });
+
+    this.bot.command('agenda', async (ctx) => {
+      try {
+        const events = await (this.brain.calendarService?.getTodayEvents ? this.brain.calendarService.getTodayEvents() : []);
+        if (events.length === 0) {
+          return ctx.reply('📅 No tienes citas agendadas para hoy en Google Calendar.');
+        }
+        let msg = `📅 <b>Tu agenda de hoy en Google Calendar (${events.length} cita${events.length === 1 ? '' : 's'}):</b>\n\n`;
+        events.forEach((ev, i) => {
+          let time = '';
+          if (ev.start) {
+            const d = new Date(ev.start);
+            time = !isNaN(d.getTime())
+              ? d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' })
+              : ev.start;
+          }
+          const loc = ev.location ? ` | 📍 <i>${ev.location}</i>` : '';
+          const link = ev.htmlLink ? ` (<a href="${ev.htmlLink}">Ver</a>)` : '';
+          msg += `${i + 1}. ⏰ <b>${time}</b> - <b>${ev.summary}</b>${loc}${link}\n`;
+        });
+        await this._safeReply(ctx, msg);
+      } catch (err) {
+        await ctx.reply(`Error consultando agenda: ${err.message}`);
+      }
+    });
+
+    this.bot.command('contactos', async (ctx) => {
+      try {
+        const text = ctx.message.text || '';
+        const query = text.replace(/^\/contactos\s*/i, '').trim();
+
+        const contactSvc = this.brain.contactService;
+        if (!contactSvc) {
+          return ctx.reply('Directorio de contactos no disponible.');
+        }
+
+        const contacts = query
+          ? await contactSvc.searchContacts({ query })
+          : await contactSvc.listContacts({ limit: 15 });
+
+        if (contacts.length === 0) {
+          return ctx.reply(query ? `🔍 No encontré contactos con "${query}".` : '👤 No tienes contactos guardados todavía.');
+        }
+
+        let msg = query
+          ? `🔍 <b>Contactos encontrados para "${query}":</b>\n\n`
+          : `👥 <b>Directorio de contactos (PostgreSQL):</b>\n\n`;
+
+        contacts.forEach((c, i) => {
+          const role = c.role ? ` (${c.role})` : '';
+          const comp = c.company ? ` - 🏢 ${c.company}` : '';
+          let phoneLinks = '📞 Sin tel';
+          if (c.phone) {
+            const clean = c.phone.replace(/\D/g, '');
+            phoneLinks = `📞 <a href="tel:${c.phone}">${c.phone}</a> | 💬 <a href="https://wa.me/${clean}">WA</a>`;
+          }
+          msg += `${i + 1}. <b>${c.name}</b>${role}${comp}\n   ${phoneLinks}\n`;
+        });
+
+        await this._safeReply(ctx, msg);
+      } catch (err) {
+        await ctx.reply(`Error consultando contactos: ${err.message}`);
       }
     });
   }

@@ -20,6 +20,14 @@ import { runMigration } from '../scripts/migrate-json-to-prisma.js';
 import { AgyBridge } from '../src/core/agy-bridge.js';
 import { SchedulerService } from '../src/services/scheduler.service.js';
 import { CalendarService } from '../src/services/calendar.service.js';
+import { ContactService } from '../src/services/contact.service.js';
+import { GoogleTasksService } from '../src/services/google-tasks.service.js';
+import { config } from '../src/config.js';
+
+// Setup de configuración y credenciales para pruebas de seguridad
+config.apiKey = 'test-secret-key-2026';
+config.whatsapp.allowedNumbers = ['50212345678'];
+const authHeaders = { authorization: 'Bearer test-secret-key-2026' };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -202,11 +210,67 @@ class MockPrismaClient {
 
     this.contact = {
       create: async ({ data }) => {
-        const item = { id: `ct_${Date.now()}`, createdAt: data.createdAt || new Date(), ...data };
+        const item = {
+          id: `ct_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          createdAt: data.createdAt || new Date(),
+          ...data,
+        };
         this._data.contacts.unshift(item);
         return item;
       },
-      findMany: async () => this._data.contacts,
+      findFirst: async ({ where = {} } = {}) => {
+        return this._data.contacts.find((c) => {
+          if (where.phone && c.phone === where.phone) return true;
+          if (where.email && c.email === where.email) return true;
+          if (where.name?.equals) {
+            return c.name.toLowerCase() === where.name.equals.toLowerCase();
+          }
+          return false;
+        }) || null;
+      },
+      findUnique: async ({ where = {} } = {}) => {
+        return this._data.contacts.find((c) => {
+          if (where.id && c.id === where.id) return true;
+          if (where.phone && c.phone === where.phone) return true;
+          if (where.email && c.email === where.email) return true;
+          return false;
+        }) || null;
+      },
+      findMany: async ({ where = {}, take = 50, orderBy = {} } = {}) => {
+        let res = [...this._data.contacts];
+        if (where.OR && Array.isArray(where.OR)) {
+          res = res.filter((c) => {
+            return where.OR.some((cond) => {
+              for (const [key, val] of Object.entries(cond)) {
+                if (val?.contains && typeof c[key] === 'string') {
+                  if (c[key].toLowerCase().includes(val.contains.toLowerCase())) {
+                    return true;
+                  }
+                }
+              }
+              return false;
+            });
+          });
+        }
+        if (orderBy.name) {
+          res.sort((a, b) => a.name.localeCompare(b.name));
+        }
+        return res.slice(0, take);
+      },
+      update: async ({ where, data }) => {
+        const item = this._data.contacts.find((c) => c.id === where.id);
+        if (!item) throw new Error('Contact not found');
+        Object.assign(item, data);
+        return item;
+      },
+      delete: async ({ where }) => {
+        const idx = this._data.contacts.findIndex((c) => c.id === where.id);
+        if (idx !== -1) {
+          const [removed] = this._data.contacts.splice(idx, 1);
+          return removed;
+        }
+        return null;
+      },
     };
   }
 
@@ -432,7 +496,7 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(messages.some((m) => m.content.includes('Hola bebe')));
   });
 
-  await t.test('7. Endpoints HTTP Fastify (Health Check, Facturas, Documentos, Tareas, Ideas)', async () => {
+  await t.test('7. Endpoints HTTP Fastify (Health Check, Facturas, Documentos, Tareas, Ideas) y Autenticación Mandatoria', async () => {
     const brain = new CarmencitaBrain({
       prisma: mockPrisma,
       documentService,
@@ -453,24 +517,36 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       whatsappAdapter,
     });
 
-    // Health check
+    // 1. Health check (público sin autenticación)
     const healthRes = await app.inject({ method: 'GET', url: '/health' });
     assert.equal(healthRes.statusCode, 200);
     const healthJson = healthRes.json();
     assert.equal(healthJson.status, 'ok');
     assert.equal(healthJson.standard, 'Deko Labs Enterprise');
 
-    // Facturas
-    const facturasRes = await app.inject({ method: 'GET', url: '/api/facturas' });
+    // 2. Rechazo 401 si no se envía API Key en /api/*
+    const unauthFacturas = await app.inject({ method: 'GET', url: '/api/facturas' });
+    assert.equal(unauthFacturas.statusCode, 401);
+    assert.ok(unauthFacturas.json().error.includes('Acceso no autorizado'));
+
+    const unauthDocs = await app.inject({ method: 'GET', url: '/api/documents' });
+    assert.equal(unauthDocs.statusCode, 401);
+
+    // 3. Facturas autorizadas con Bearer Token
+    const facturasRes = await app.inject({ method: 'GET', url: '/api/facturas', headers: authHeaders });
     assert.equal(facturasRes.statusCode, 200);
     assert.ok(facturasRes.json().length >= 1);
 
-    // Tareas
-    const tasksRes = await app.inject({ method: 'GET', url: '/api/tasks' });
+    // 4. Documentos autorizados con cabecera x-api-key alternativa
+    const docsRes = await app.inject({ method: 'GET', url: '/api/documents', headers: { 'x-api-key': 'test-secret-key-2026' } });
+    assert.equal(docsRes.statusCode, 200);
+
+    // 5. Tareas autorizadas
+    const tasksRes = await app.inject({ method: 'GET', url: '/api/tasks', headers: authHeaders });
     assert.equal(tasksRes.statusCode, 200);
 
-    // Ideas
-    const ideasRes = await app.inject({ method: 'GET', url: '/api/ideas' });
+    // 6. Ideas autorizadas
+    const ideasRes = await app.inject({ method: 'GET', url: '/api/ideas', headers: authHeaders });
     assert.equal(ideasRes.statusCode, 200);
 
     await app.close();
@@ -527,6 +603,13 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       },
     };
 
+    // 0. Verificación de Deny-by-Default si la whitelist está vacía
+    const originalAllowed = config.whatsapp.allowedNumbers;
+    config.whatsapp.allowedNumbers = [];
+    const blockedResult = await whatsappAdapter.handleWebhook(documentPayload);
+    assert.equal(blockedResult.status, 'unauthorized_whitelist_empty');
+    config.whatsapp.allowedNumbers = originalAllowed;
+
     const docResult = await whatsappAdapter.handleWebhook(documentPayload);
     assert.equal(docResult.status, 'processed_document');
     assert.ok(documentCaptured);
@@ -574,7 +657,7 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     }
   });
 
-  await t.test('9. AgyBridge: Fallback automático a Shell nativo cuando AGY no está en el PATH y limpieza de markdown', async () => {
+  await t.test('9. AgyBridge: Hardening RCE con Lista Blanca Estricta y Fallback Seguro sin AGY', async () => {
     // 1. Verificar limpieza de fences markdown ```json ... ```
     const brain = new CarmencitaBrain({
       prisma: mockPrisma,
@@ -586,18 +669,23 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     const modelOutputWithFences = `¡Entendido, Sebastián! Consulto los parámetros del sistema.
 
 \`\`\`json
-{"action": "RUN_AGY_TASK", "prompt": "echo OK"}
+{"action": "RUN_AGY_TASK", "prompt": "system"}
 \`\`\``;
     const res = await brain._executeExtractedActions(modelOutputWithFences);
     assert.ok(!res.reply.includes('```json'));
     assert.ok(!res.reply.includes('```'));
     assert.ok(res.reply.includes('¡Entendido, Sebastián! Consulto los parámetros del sistema.'));
 
-    // 2. Verificar que AgyBridge con un binario inexistente cae en Shell nativo
+    // 2. Verificar que AgyBridge con un binario inexistente bloquea comandos arbitrarios (RCE hardening)
     const agyBridgeFallback = new AgyBridge('non_existent_binary_xyz_123');
-    const result = await agyBridgeFallback.executeTask('echo TEST_FALLBACK_OK');
-    assert.equal(result.success, true);
-    assert.ok(result.output.includes('TEST_FALLBACK_OK'));
+    const deniedResult = await agyBridgeFallback.executeTask('echo TEST_FALLBACK_OK');
+    assert.equal(deniedResult.success, false);
+    assert.ok(deniedResult.output.includes('Ejecución denegada: comando no autorizado en la lista blanca de seguridad.'));
+
+    // 3. Verificar que comandos en lista blanca de telemetría son ejecutados de forma segura
+    const allowedResult = await agyBridgeFallback.executeTask('system');
+    assert.equal(allowedResult.success, true);
+    assert.ok(allowedResult.output.length > 0);
   });
 
   await t.test('10. Arquitectura de Cerebro Dual: Modo Creativo & Estratégico sin Bloqueos', async () => {
@@ -721,6 +809,9 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
   });
 
   await t.test('12. Desacoplamiento Multimedia con GCS (Bóveda Desacoplada sin Basura en Disco)', async () => {
+    // Aislamiento estricto de pruebas: limpiar residuos locales previos de Test 1
+    await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
+
     const uploadedObjects = new Map();
     let deletedObjects = [];
 
@@ -740,6 +831,9 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
             deletedObjects.push(`${bucketName}/${objectPath}`);
             uploadedObjects.delete(`${bucketName}/${objectPath}`);
             return true;
+          },
+          getSignedUrl: async ({ expires }) => {
+            return [`https://storage.googleapis.com/${bucketName}/${objectPath}?signed=true&expires=${expires}`];
           },
         }),
       }),
@@ -761,11 +855,15 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       subDir: 'facturas',
     });
 
-    // 1. Verificación de ruta gs:// y URL pública
+    // 1. Verificación de ruta gs:// y URL firmada (Signed URL)
     assert.equal(result.isCloud, true);
     assert.ok(result.filePath.startsWith('gs://carmencita-vault-deko/facturas/'));
-    assert.ok(result.cloudUrl.startsWith('https://storage.googleapis.com/carmencita-vault-deko/facturas/'));
+    assert.ok(result.cloudUrl.includes('signed=true'));
     assert.equal(result.fileSize, fakePdf.length);
+
+    // 1.1 Verificación de getSignedUrl explícito
+    const explicitSignedUrl = await gcsStorageProvider.getSignedUrl(result.filePath);
+    assert.ok(explicitSignedUrl.includes('signed=true'));
 
     // 2. Verificación de CERO bytes en el disco local del VPS
     const localDirExists = await fs.access(path.join(testDataDir, 'facturas')).then(() => true).catch(() => false);
@@ -931,6 +1029,306 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(actionResult.reply.includes('https://calendar.google.com/calendar/event?eid=cal_event_78910'));
     assert.equal(actionResult.hasCalendarEvent, true);
     assert.equal(actionResult.calendarEvent.id, 'cal_event_78910');
+  });
+
+  await t.test('15. Directorio y Gestión de Contactos: ContactService y Acciones SAVE_CONTACT / SEARCH_CONTACT', async () => {
+    const contactService = new ContactService(mockPrisma);
+
+    // 1. Crear contacto y sanitizar teléfono
+    const c1 = await contactService.createOrUpdateContact({
+      name: 'Carlos Gómez',
+      role: 'Carpintero y Ebanista',
+      phone: '+502 5555-1234',
+      company: 'Maderas del Bosque',
+      notes: 'Experto en consolas y mesas vintage',
+    });
+
+    assert.ok(c1.id);
+    assert.equal(c1.name, 'Carlos Gómez');
+    assert.equal(c1.phone, '+50255551234');
+    assert.equal(c1.company, 'Maderas del Bosque');
+
+    // 2. Actualizar contacto existente (upsert por teléfono) sin duplicados
+    const updated = await contactService.createOrUpdateContact({
+      name: 'Carlos Gómez',
+      phone: '+502 5555-1234',
+      notes: 'Disponible para eventos feriales',
+    });
+    assert.equal(updated.id, c1.id);
+    assert.ok(updated.notes.includes('Disponible para eventos'));
+
+    // 3. Búsqueda insensible a mayúsculas
+    const results = await contactService.searchContacts({ query: 'maderas' });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].name, 'Carlos Gómez');
+
+    const roleResults = await contactService.searchContacts({ query: 'ebanista' });
+    assert.equal(roleResults.length, 1);
+
+    // 4. Integración en CarmencitaBrain con SAVE_CONTACT
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      contactService,
+    });
+
+    const modelSaveContact = `¡Entendido, Sebastián! Guardo de inmediato a Elena en tu directorio.
+
+\`\`\`json
+{"action": "SAVE_CONTACT", "name": "Elena Morales", "role": "Diseñadora Textil", "phone": "50244449999", "company": "Telares Chapines", "notes": "Tejidos artesanales"}
+\`\`\``;
+
+    const saveResult = await brain._executeExtractedActions(modelSaveContact);
+    assert.ok(!saveResult.reply.includes('```json'));
+    assert.ok(saveResult.reply.includes('¡Contacto registrado en tu directorio!'));
+    assert.ok(saveResult.reply.includes('Elena Morales'));
+    assert.ok(saveResult.reply.includes('Telares Chapines'));
+    assert.ok(saveResult.contact);
+    assert.equal(saveResult.contact.name, 'Elena Morales');
+
+    // 5. Integración en CarmencitaBrain con SEARCH_CONTACT (con enlaces tel: y WhatsApp)
+    const modelSearchContact = `Consultando el directorio para encontrar proveedores textiles...
+
+\`\`\`json
+{"action": "SEARCH_CONTACT", "query": "textil"}
+\`\`\``;
+
+    const searchResult = await brain._executeExtractedActions(modelSearchContact);
+    assert.ok(!searchResult.reply.includes('```json'));
+    assert.ok(searchResult.reply.includes('Contactos encontrados para "textil"'));
+    assert.ok(searchResult.reply.includes('Elena Morales'));
+    assert.ok(searchResult.reply.includes('tel:50244449999'));
+    assert.ok(searchResult.reply.includes('https://wa.me/50244449999'));
+    assert.ok(searchResult.contacts.length >= 1);
+  });
+
+  await t.test('16. Consulta Inteligente de Agenda: CalendarService getTodayEvents y Acción LIST_CALENDAR_EVENTS', async () => {
+    const todayIso = new Date().toISOString();
+    const mockCalendar = {
+      events: {
+        list: async () => {
+          return {
+            data: {
+              items: [
+                {
+                  id: 'ev_101',
+                  summary: 'Montaje de Stand Feria Deco',
+                  start: { dateTime: todayIso },
+                  end: { dateTime: todayIso },
+                  location: 'Parque de la Industria',
+                  htmlLink: 'https://calendar.google.com/event?id=ev_101',
+                },
+                {
+                  id: 'ev_102',
+                  summary: 'Reunión con Proveedor de Iluminación',
+                  start: { dateTime: todayIso },
+                  end: { dateTime: todayIso },
+                  location: 'Oficina Central',
+                  htmlLink: 'https://calendar.google.com/event?id=ev_102',
+                },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const calendarService = new CalendarService({ calendarClient: mockCalendar });
+
+    // 1. Consulta directa de eventos de hoy
+    const todayEvents = await calendarService.getTodayEvents();
+    assert.equal(todayEvents.length, 2);
+    assert.equal(todayEvents[0].summary, 'Montaje de Stand Feria Deco');
+    assert.equal(todayEvents[0].location, 'Parque de la Industria');
+
+    // 2. Integración en CarmencitaBrain con LIST_CALENDAR_EVENTS
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      calendarService,
+    });
+
+    const modelListOutput = `Revisando tu agenda del día en Google Calendar...
+
+\`\`\`json
+{"action": "LIST_CALENDAR_EVENTS", "range": "TODAY"}
+\`\`\``;
+
+    const listResult = await brain._executeExtractedActions(modelListOutput);
+    assert.ok(!listResult.reply.includes('```json'));
+    assert.ok(listResult.reply.includes('Agenda de Google Calendar (de Hoy'));
+    assert.ok(listResult.reply.includes('Montaje de Stand Feria Deco'));
+    assert.ok(listResult.reply.includes('Parque de la Industria'));
+    assert.equal(listResult.calendarEvents.length, 2);
+  });
+
+  await t.test('17. Sincronización Bidireccional con Google Tasks: GoogleTasksService y TaskService', async () => {
+    let insertedTaskPayload = null;
+    const mockTasksClient = {
+      tasks: {
+        insert: async ({ tasklist, requestBody }) => {
+          insertedTaskPayload = { tasklist, ...requestBody };
+          return {
+            data: {
+              id: 'gtask_12345',
+              title: requestBody.title,
+              notes: requestBody.notes,
+              due: requestBody.due,
+              status: 'needsAction',
+            },
+          };
+        },
+        list: async () => {
+          return {
+            data: {
+              items: [
+                { id: 'gtask_1', title: 'Tarea sincronizada previa' },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const googleTasksService = new GoogleTasksService({ tasksClient: mockTasksClient });
+    assert.equal(googleTasksService.isConfigured(), true);
+
+    // 1. Probar inserción directa en GoogleTasksService
+    const createdGTask = await googleTasksService.createTask({
+      title: 'Auditar conexiones eléctricas del stand',
+      notes: 'Prioridad ALTA',
+      dueDate: '2026-10-02',
+    });
+    assert.equal(createdGTask.id, 'gtask_12345');
+    assert.equal(insertedTaskPayload.title, 'Auditar conexiones eléctricas del stand');
+
+    // 2. Probar sincronización en segundo plano desde TaskService
+    const taskServiceWithSync = new TaskService(mockPrisma, googleTasksService);
+    insertedTaskPayload = null;
+
+    const localTask = await taskServiceWithSync.createTask({
+      description: 'Comprar barniz rústico para estantes',
+      due: '2026-10-03',
+      priority: 'ALTA',
+    });
+
+    assert.ok(localTask.id);
+    assert.equal(localTask.description, 'Comprar barniz rústico para estantes');
+
+    // Esperar un tick de microtask para sincronización en segundo plano
+    await new Promise((r) => setTimeout(r, 20));
+    assert.ok(insertedTaskPayload);
+    assert.equal(insertedTaskPayload.title, 'Comprar barniz rústico para estantes');
+    assert.ok(insertedTaskPayload.notes.includes('Prioridad: ALTA'));
+  });
+
+  await t.test('18. Briefing Matutino Ejecutivo: SchedulerService con Clima Open-Meteo, Agenda y Prevención de Duplicados', async () => {
+    const mockWeather = '18°C, Soleado y despejado';
+    const mockCalendar = {
+      getTodayEvents: async () => [
+        { summary: 'Reunión de Apertura Feria', start: '2026-09-28T10:00:00Z', location: 'Hotel Casa Santo Domingo' },
+      ],
+    };
+
+    const capturedBriefs = [];
+    const mockTelegram = {
+      sendMessage: async (chatId, text) => {
+        capturedBriefs.push({ chatId, text });
+        return true;
+      },
+    };
+
+    const scheduler = new SchedulerService({
+      prisma: mockPrisma,
+      telegramAdapter: mockTelegram,
+      calendarService: mockCalendar,
+      taskService,
+      weatherFetcher: async () => mockWeather,
+    });
+
+    // 1. Disparo manual de Briefing Matutino
+    const briefDate = new Date('2026-09-28T07:01:00-06:00');
+    const briefMessage = await scheduler.triggerMorningBrief(briefDate);
+
+    assert.ok(briefMessage.includes('🌅 ¡Buenos días, Sebastián!'));
+    assert.ok(briefMessage.includes('18°C, Soleado y despejado'));
+    assert.ok(briefMessage.includes('Reunión de Apertura Feria'));
+    assert.ok(briefMessage.includes('Hotel Casa Santo Domingo'));
+    assert.ok(briefMessage.includes('¡Que sea un día muy exitoso para Deko Labs!'));
+
+    assert.equal(capturedBriefs.length, 1);
+    assert.equal(scheduler.lastBriefDate, '2026-09-28');
+
+    // 2. Prevención de duplicados el mismo día (idempotencia en checkMorningBrief)
+    const checkSecond = await scheduler.checkMorningBrief(new Date('2026-09-28T07:03:00-06:00'));
+    assert.equal(checkSecond, null, 'No debe disparar un segundo briefing el mismo día');
+    assert.equal(capturedBriefs.length, 1, 'No debe enviar mensajes repetidos');
+  });
+
+  await t.test('19. Endpoints HTTP Fastify de Contactos y Agenda (/api/contacts, /api/calendar/today)', async () => {
+    const contactService = new ContactService(mockPrisma);
+    await contactService.createOrUpdateContact({
+      name: 'Mario Rossi',
+      role: 'Herrero Artesanal',
+      phone: '50233332222',
+      company: 'Forja Antigua',
+    });
+
+    const mockCalendar = {
+      getTodayEvents: async () => [
+        { id: '1', summary: 'Cita con Mario Rossi', start: '2026-09-28T14:00:00Z' },
+      ],
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      contactService,
+      calendarService: mockCalendar,
+    });
+
+    const app = Fastify();
+    registerRoutes(app, {
+      brain,
+      documentService,
+      taskService,
+      ideaService,
+      contactService,
+      calendarService: mockCalendar,
+      telegramAdapter: null,
+      whatsappAdapter: null,
+    });
+
+    // 1. Listar contactos
+    const contactsRes = await app.inject({ method: 'GET', url: '/api/contacts', headers: authHeaders });
+    assert.equal(contactsRes.statusCode, 200);
+    const contactsList = contactsRes.json();
+    assert.ok(contactsList.some((c) => c.name === 'Mario Rossi'));
+
+    // 2. Filtrar contactos por búsqueda q=
+    const searchRes = await app.inject({ method: 'GET', url: '/api/contacts?q=herrero', headers: authHeaders });
+    assert.equal(searchRes.statusCode, 200);
+    const searchList = searchRes.json();
+    assert.equal(searchList.length, 1);
+    assert.equal(searchList[0].name, 'Mario Rossi');
+
+    // 3. Agenda de hoy
+    const calRes = await app.inject({ method: 'GET', url: '/api/calendar/today', headers: authHeaders });
+    assert.equal(calRes.statusCode, 200);
+    const calList = calRes.json();
+    assert.equal(calList.length, 1);
+    assert.equal(calList[0].summary, 'Cita con Mario Rossi');
+
+    await app.close();
   });
 
   // Limpieza final

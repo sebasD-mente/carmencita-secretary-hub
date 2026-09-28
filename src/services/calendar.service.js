@@ -106,6 +106,71 @@ export class CalendarService {
       location: item.location || null,
     }));
   }
+
+  async getEventsForDateRange({
+    startDate,
+    endDate,
+    calendarId = 'primary',
+    timeZone = 'America/Guatemala',
+  }) {
+    const calendar = await this._getCalendarClient();
+    if (!calendar) {
+      return [];
+    }
+
+    const timeMin = new Date(startDate).toISOString();
+    const timeMax = new Date(endDate).toISOString();
+
+    const res = await calendar.events.list({
+      calendarId,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
+
+    const items = res.data?.items || [];
+    return items.map((item) => ({
+      id: item.id,
+      summary: item.summary || '(Sin título)',
+      description: item.description || '',
+      start: item.start?.dateTime || item.start?.date,
+      end: item.end?.dateTime || item.end?.date,
+      location: item.location || null,
+      htmlLink: item.htmlLink || `https://calendar.google.com/calendar/event?eid=${item.id}`,
+    }));
+  }
+
+  async getTodayEvents({ calendarId = 'primary', timeZone = 'America/Guatemala' } = {}) {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+
+    const startDate = new Date(`${parts}T00:00:00-06:00`);
+    const endDate = new Date(`${parts}T23:59:59.999-06:00`);
+
+    return await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+  }
+
+  async getTomorrowEvents({ calendarId = 'primary', timeZone = 'America/Guatemala' } = {}) {
+    const now = new Date();
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(tomorrow);
+
+    const startDate = new Date(`${parts}T00:00:00-06:00`);
+    const endDate = new Date(`${parts}T23:59:59.999-06:00`);
+
+    return await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+  }
 }
 
 export const defaultCalendarService = new CalendarService();

@@ -9,7 +9,8 @@ dotenv.config();
 
 export const config = {
   port: parseInt(process.env.PORT || '3050', 10),
-  host: process.env.HOST || '0.0.0.0',
+  host: process.env.HOST || '127.0.0.1', // Blindaje perimetral: bind exclusivo a localhost
+  apiKey: process.env.CARMENCITA_API_KEY || '',
   storageDir: process.env.STORAGE_DIR || path.resolve(__dirname, '../data'),
   databaseUrl: process.env.DATABASE_URL || '',
 
@@ -38,7 +39,7 @@ export const config = {
   ai: {
     geminiApiKey: process.env.GEMINI_API_KEY || '',
     modelName: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
-    agyBinPath: process.env.AGY_BIN_PATH || 'agy',
+    agyBinPath: process.env.AGY_BIN_PATH || '/root/.local/bin/agy',
   },
 
   // Google Workspace & Cloud Storage

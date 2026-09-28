@@ -110,12 +110,14 @@ export class WhatsAppAdapter {
       const senderName = messageData.pushName || 'Sebastián';
       if (messageData.key.fromMe) return { status: 'ignored_from_me' };
 
-      // Filtro de Seguridad (Whitelist)
-      if (config.whatsapp.allowedNumbers.length > 0) {
-        if (!config.whatsapp.allowedNumbers.includes(senderPhone)) {
-          console.warn(`[WhatsApp Security] Mensaje no autorizado: ${senderPhone}`);
-          return { status: 'unauthorized' };
-        }
+      // Filtro de Seguridad Estricto (Deny-by-Default)
+      if (!config.whatsapp.allowedNumbers || config.whatsapp.allowedNumbers.length === 0) {
+        console.warn(`[WhatsApp Security] Whitelist vacía. Mensaje bloqueado por omisión desde: ${senderPhone}`);
+        return { status: 'unauthorized_whitelist_empty' };
+      }
+      if (!config.whatsapp.allowedNumbers.includes(senderPhone)) {
+        console.warn(`[WhatsApp Security] Mensaje no autorizado: ${senderPhone}`);
+        return { status: 'unauthorized' };
       }
 
       const message = messageData.message;

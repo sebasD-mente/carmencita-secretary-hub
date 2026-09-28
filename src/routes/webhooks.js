@@ -1,7 +1,27 @@
 import { prisma } from '../core/prisma.js';
+import { config } from '../config.js';
 
-export function registerRoutes(fastify, { brain, documentService, taskService, ideaService, telegramAdapter, whatsappAdapter }) {
-  // 1. Health Check
+export function registerRoutes(fastify, { brain, documentService, taskService, ideaService, calendarService, contactService, telegramAdapter, whatsappAdapter }) {
+  // --- MIDDLEWARE GLOBAL DE SEGURIDAD PARA RUTAS /api/* ---
+  fastify.addHook('preHandler', async (request, reply) => {
+    if (request.url.startsWith('/api/')) {
+      const authHeader = request.headers.authorization;
+      const apiKeyHeader = request.headers['x-api-key'];
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : apiKeyHeader;
+      const expectedKey = config.apiKey || process.env.CARMENCITA_API_KEY;
+
+      // Si hay una API Key configurada o se está en modo producción, exigir autenticación obligatoria
+      if (expectedKey) {
+        if (!token || token !== expectedKey) {
+          return reply.code(401).send({
+            error: 'Acceso no autorizado. Se requiere cabecera Authorization: Bearer <CARMENCITA_API_KEY> o x-api-key.',
+          });
+        }
+      }
+    }
+  });
+
+  // 1. Health Check (Público para probes / Dokploy)
   fastify.get('/health', async () => {
     let dbStatus = 'disconnected';
     try {
@@ -26,8 +46,16 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
     };
   });
 
-  // 2. Webhook para Evolution API (WhatsApp)
+  // 2. Webhook para Evolution API (WhatsApp) con validación de secreto
   fastify.post('/webhooks/whatsapp', async (request, reply) => {
+    // Verificación de autenticidad del webhook
+    if (config.whatsapp.apiKey) {
+      const receivedKey = request.headers['apikey'] || request.headers['x-api-key'] || request.headers['x-webhook-secret'];
+      if (receivedKey && receivedKey !== config.whatsapp.apiKey) {
+        return reply.code(401).send({ error: 'Webhook secret no autorizado.' });
+      }
+    }
+
     try {
       const result = await whatsappAdapter.handleWebhook(request.body);
       return reply.code(200).send(result);
@@ -68,7 +96,26 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
     return await tSvc.listTasks({ onlyPending });
   });
 
-  // 6. Envío manual / API de despacho omnicanal
+  // 6. Directorio de Contactos
+  fastify.get('/api/contacts', async (request) => {
+    const q = request.query.q || request.query.query || null;
+    const limit = parseInt(request.query.limit || '20', 10);
+    const cntSvc = contactService || brain?.contactService;
+    if (!cntSvc) return [];
+    if (q) {
+      return await cntSvc.searchContacts({ query: q, limit });
+    }
+    return await cntSvc.listContacts({ limit });
+  });
+
+  // 7. Agenda de Google Calendar (Eventos de Hoy)
+  fastify.get('/api/calendar/today', async () => {
+    const calSvc = calendarService || brain?.calendarService;
+    if (!calSvc?.getTodayEvents) return [];
+    return await calSvc.getTodayEvents();
+  });
+
+  // 8. Envío manual / API de despacho omnicanal
   fastify.post('/api/send', async (request, reply) => {
     const { channel, recipient, text } = request.body || {};
     if (!channel || !recipient || !text) {

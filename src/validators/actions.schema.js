@@ -120,12 +120,36 @@ export const CreateCalendarEventActionSchema = z.object({
   location: z.string().optional().nullable(),
 });
 
+export const ListCalendarEventsActionSchema = z.object({
+  action: z.literal('LIST_CALENDAR_EVENTS'),
+  range: z.enum(['TODAY', 'TOMORROW', 'UPCOMING']).default('TODAY'),
+  date: z.string().optional().nullable(),
+});
+
+export const SaveContactActionSchema = z.object({
+  action: z.literal('SAVE_CONTACT'),
+  name: z.string().min(1, 'El nombre es obligatorio'),
+  role: z.string().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  email: z.string().optional().nullable(),
+  company: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+});
+
+export const SearchContactActionSchema = z.object({
+  action: z.literal('SEARCH_CONTACT'),
+  query: z.string().min(1, 'El término de búsqueda es obligatorio'),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
   SaveIdeaActionSchema,
   SaveTaskActionSchema,
   CreateCalendarEventActionSchema,
+  ListCalendarEventsActionSchema,
+  SaveContactActionSchema,
+  SearchContactActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

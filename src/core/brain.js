@@ -6,6 +6,8 @@ import { taskService as defaultTaskService } from '../services/task.service.js';
 import { ideaService as defaultIdeaService } from '../services/idea.service.js';
 import { excelService as defaultExcelService } from '../services/excel.service.js';
 import { defaultCalendarService } from '../services/calendar.service.js';
+import { contactService as defaultContactService } from '../services/contact.service.js';
+import { defaultGoogleTasksService } from '../services/google-tasks.service.js';
 import { parseCarmencitaAction } from '../validators/actions.schema.js';
 
 function makeActionResult(opts) {
@@ -15,6 +17,9 @@ function makeActionResult(opts) {
     hasExcel: opts.hasExcel || false,
     hasCalendarEvent: opts.hasCalendarEvent || false,
     calendarEvent: opts.calendarEvent || null,
+    calendarEvents: opts.calendarEvents || null,
+    contact: opts.contact || null,
+    contacts: opts.contacts || null,
     excelFile: opts.excelFile || null,
     fullHistoryText: opts.fullHistoryText || opts.reply,
     actionData: opts.actionData || null,
@@ -35,6 +40,8 @@ export class CarmencitaBrain {
     this.ideaService = deps?.ideaService || defaultIdeaService;
     this.excelService = deps?.excelService || defaultExcelService;
     this.calendarService = deps?.calendarService || defaultCalendarService;
+    this.contactService = deps?.contactService || defaultContactService;
+    this.googleTasksService = deps?.googleTasksService || defaultGoogleTasksService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
 
     this.ai = deps?.ai || null;
@@ -83,6 +90,9 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DD", "priority": "ALTA|MEDIA|BAJA"}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
+- Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
+- Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
+- Buscar contacto o teléfono: {"action": "SEARCH_CONTACT", "query": "término o nombre a buscar"}
 
 TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
   }
@@ -336,19 +346,56 @@ Responde únicamente con un objeto JSON:
     }
   }
 
+  _extractActionJson(rawText) {
+    if (!rawText) return null;
+
+    // 1. Prioridad: Bloque de código ```json ... ``` delimitado
+    const codeBlockMatch = rawText.match(/```(?:json)?\s*([\s\S]*?\{[\s\S]*?"action"[\s\S]*?\})\s*```/i);
+    if (codeBlockMatch) {
+      try {
+        const parsed = JSON.parse(codeBlockMatch[1].trim());
+        if (parsed?.action) return { parsed, matchedString: codeBlockMatch[0] };
+      } catch {}
+    }
+
+    // 2. Extracción quirúrgica balanceada de llaves {} alrededor de "action"
+    const actionIndex = rawText.indexOf('"action"');
+    if (actionIndex !== -1) {
+      const openBrace = rawText.lastIndexOf('{', actionIndex);
+      if (openBrace !== -1) {
+        let depth = 0;
+        for (let i = openBrace; i < rawText.length; i++) {
+          if (rawText[i] === '{') depth++;
+          else if (rawText[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              const candidate = rawText.slice(openBrace, i + 1);
+              try {
+                const parsed = JSON.parse(candidate);
+                if (parsed?.action) return { parsed, matchedString: candidate };
+              } catch {}
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
   async _executeExtractedActions(rawText, onProgress = null) {
     let cleanText = rawText;
-    const jsonMatch = rawText.match(/\{[\s\S]*"action"[\s\S]*\}/);
-    if (!jsonMatch) {
+    const extracted = this._extractActionJson(rawText);
+    if (!extracted) {
       return makeActionResult({ reply: cleanText });
     }
 
     let parsedAction = null;
     try {
-      parsedAction = parseCarmencitaAction(JSON.parse(jsonMatch[0]));
+      parsedAction = parseCarmencitaAction(extracted.parsed);
       cleanText = rawText
-        .replace(/```(?:json)?\s*\{[\s\S]*?"action"[\s\S]*?\}\s*```/gi, '')
-        .replace(/\{[\s\S]*?"action"[\s\S]*?\}/gi, '')
+        .replace(extracted.matchedString, '')
         .replace(/```(?:json)?\s*```/gi, '')
         .trim();
     } catch (e) {
@@ -434,6 +481,125 @@ Responde únicamente con un objeto JSON:
         calendarEvent: eventResult,
         actionData: parsedAction,
         fullHistoryText: `${cleanText}\n[Evento agendado en Google Calendar: ${parsedAction.summary} (${link})]`,
+      });
+    }
+
+    if (parsedAction.action === 'LIST_CALENDAR_EVENTS') {
+      const range = parsedAction.range || 'TODAY';
+      let events = [];
+      let rangeLabel = 'de Hoy';
+      if (this.calendarService) {
+        try {
+          if (range === 'TOMORROW') {
+            rangeLabel = 'de Mañana';
+            events = await this.calendarService.getTomorrowEvents();
+          } else if (range === 'UPCOMING') {
+            rangeLabel = 'Próximas Citas';
+            events = await this.calendarService.listUpcomingEvents({ maxResults: 10 });
+          } else {
+            rangeLabel = 'de Hoy';
+            events = await this.calendarService.getTodayEvents();
+          }
+        } catch (err) {
+          console.error('[Brain] Error listando eventos del calendario:', err.message);
+        }
+      }
+
+      let itinerary = '';
+      if (events.length === 0) {
+        itinerary = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>Agenda de Google Calendar (${rangeLabel}):</b>\n\n• No tienes citas agendadas. ¡Tiempo despejado para enfocarte!`;
+      } else {
+        const list = events.map((ev, i) => {
+          let time = '';
+          if (ev.start) {
+            const d = new Date(ev.start);
+            time = !isNaN(d.getTime())
+              ? d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' })
+              : ev.start;
+          }
+          const loc = ev.location ? ` | 📍 <i>${ev.location}</i>` : '';
+          const link = ev.htmlLink ? ` (<a href="${ev.htmlLink}">Ver</a>)` : '';
+          return `${i + 1}. ⏰ <b>${time}</b> - <b>${ev.summary}</b>${loc}${link}`;
+        }).join('\n');
+        itinerary = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>Agenda de Google Calendar (${rangeLabel} - ${events.length} cita${events.length === 1 ? '' : 's'}):</b>\n\n${list}`;
+      }
+
+      return makeActionResult({
+        reply: itinerary,
+        actionData: parsedAction,
+        calendarEvents: events,
+        fullHistoryText: `${cleanText}\n[Agenda consultada (${rangeLabel}): ${events.length} citas]`,
+      });
+    }
+
+    if (parsedAction.action === 'SAVE_CONTACT') {
+      let contact = null;
+      try {
+        contact = await this.contactService.createOrUpdateContact({
+          name: parsedAction.name,
+          role: parsedAction.role,
+          phone: parsedAction.phone,
+          email: parsedAction.email,
+          company: parsedAction.company,
+          notes: parsedAction.notes,
+        });
+      } catch (err) {
+        console.error('[Brain] Error guardando contacto:', err.message);
+      }
+
+      let reply = '';
+      if (contact) {
+        reply = `${cleanText ? cleanText + '\n\n' : ''}👤 <b>¡Contacto registrado en tu directorio!</b>\n\n` +
+          `🏷️ <b>Nombre:</b> ${contact.name}\n` +
+          `💼 <b>Cargo:</b> ${contact.role || 'No especificado'}\n` +
+          `🏢 <b>Empresa:</b> ${contact.company || 'Deko Labs / Particular'}\n` +
+          `📞 <b>Teléfono:</b> ${contact.phone ? `<code>${contact.phone}</code>` : 'No registrado'}\n` +
+          `✉️ <b>Email:</b> ${contact.email || 'No registrado'}\n` +
+          (contact.notes ? `📝 <b>Notas:</b> ${contact.notes}\n` : '');
+      } else {
+        reply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude registrar el contacto en la base de datos.`;
+      }
+
+      return makeActionResult({
+        reply,
+        actionData: parsedAction,
+        contact,
+        fullHistoryText: `${cleanText}\n[Contacto guardado: ${contact?.name || parsedAction.name}]`,
+      });
+    }
+
+    if (parsedAction.action === 'SEARCH_CONTACT') {
+      let contacts = [];
+      try {
+        contacts = await this.contactService.searchContacts({ query: parsedAction.query });
+      } catch (err) {
+        console.error('[Brain] Error buscando contactos:', err.message);
+      }
+
+      let reply = '';
+      if (contacts.length === 0) {
+        reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 No encontré contactos en el directorio con el término "<b>${parsedAction.query}</b>".`;
+      } else {
+        const list = contacts.map((c, i) => {
+          const role = c.role ? `(${c.role})` : '';
+          const comp = c.company ? `🏢 ${c.company}` : '';
+          let phoneLinks = '📞 Sin teléfono';
+          if (c.phone) {
+            const cleanDigits = c.phone.replace(/\D/g, '');
+            phoneLinks = `📞 <a href="tel:${c.phone}">${c.phone}</a> | 💬 <a href="https://wa.me/${cleanDigits}">WhatsApp</a>`;
+          }
+          const email = c.email ? ` | ✉️ <a href="mailto:${c.email}">${c.email}</a>` : '';
+          return `${i + 1}. 👤 <b>${c.name}</b> ${role}\n   ${comp ? comp + '\n   ' : ''}${phoneLinks}${email}`;
+        }).join('\n\n');
+
+        reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 <b>Contactos encontrados para "${parsedAction.query}" (${contacts.length}):</b>\n\n${list}`;
+      }
+
+      return makeActionResult({
+        reply,
+        actionData: parsedAction,
+        contacts,
+        fullHistoryText: `${cleanText}\n[Búsqueda de contactos: "${parsedAction.query}" -> ${contacts.length} resultados]`,
       });
     }
 

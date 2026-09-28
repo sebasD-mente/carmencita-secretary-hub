@@ -1,13 +1,15 @@
 import { prisma as defaultPrisma } from '../core/prisma.js';
+import { defaultGoogleTasksService } from './google-tasks.service.js';
 import { SaveTaskActionSchema, TaskStatusSchema, PrioritySchema } from '../validators/actions.schema.js';
 
 export class TaskService {
-  constructor(prismaClient = defaultPrisma) {
+  constructor(prismaClient = defaultPrisma, googleTasksService = defaultGoogleTasksService) {
     this.prisma = prismaClient;
+    this.googleTasksService = googleTasksService;
   }
 
   /**
-   * Crea una nueva tarea en PostgreSQL con validación Zod.
+   * Crea una nueva tarea en PostgreSQL con validación Zod y sincronización opcional con Google Tasks.
    */
   async createTask(data) {
     const validated = SaveTaskActionSchema.parse({
@@ -25,7 +27,7 @@ export class TaskService {
       }
     }
 
-    return await this.prisma.task.create({
+    const task = await this.prisma.task.create({
       data: {
         description: validated.description,
         dueDate,
@@ -33,6 +35,19 @@ export class TaskService {
         status: 'PENDIENTE',
       },
     });
+
+    // Sincronización en segundo plano con Google Tasks (sin bloquear la respuesta)
+    if (this.googleTasksService?.isConfigured?.()) {
+      this.googleTasksService.createTask({
+        title: task.description,
+        notes: `Prioridad: ${task.priority} | Creada desde Carmencita Hub`,
+        dueDate: task.dueDate,
+      }).catch((err) => {
+        console.warn('[TaskService] Falló sincronización en segundo plano con Google Tasks:', err.message);
+      });
+    }
+
+    return task;
   }
 
   /**

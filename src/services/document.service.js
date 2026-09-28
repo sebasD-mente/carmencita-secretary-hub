@@ -113,7 +113,7 @@ export class DocumentService {
       include: {
         document: true,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { document: { createdAt: 'desc' } },
       take: limit,
     });
   }

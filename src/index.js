@@ -9,6 +9,8 @@ import { taskService } from './services/task.service.js';
 import { ideaService } from './services/idea.service.js';
 import { excelService } from './services/excel.service.js';
 import { defaultCalendarService } from './services/calendar.service.js';
+import { contactService } from './services/contact.service.js';
+import { defaultGoogleTasksService } from './services/google-tasks.service.js';
 import { schedulerService } from './services/scheduler.service.js';
 import { AgyBridge } from './core/agy-bridge.js';
 import { CarmencitaBrain } from './core/brain.js';
@@ -55,6 +57,8 @@ async function main() {
       ideaService,
       excelService,
       calendarService: defaultCalendarService,
+      contactService,
+      googleTasksService: defaultGoogleTasksService,
     },
     agyBridge
   );
@@ -74,6 +78,8 @@ async function main() {
     documentService,
     taskService,
     ideaService,
+    calendarService: defaultCalendarService,
+    contactService,
     telegramAdapter,
     whatsappAdapter,
   });
@@ -92,9 +98,11 @@ async function main() {
     await telegramAdapter.start();
   }
 
-  // 8. Arrancar Motor Proactivo de Recordatorios (Heartbeat Scheduler)
+  // 8. Arrancar Motor Proactivo de Recordatorios y Briefing Matutino
   schedulerService.telegramAdapter = telegramAdapter;
   schedulerService.prisma = prisma;
+  schedulerService.calendarService = defaultCalendarService;
+  schedulerService.taskService = taskService;
   schedulerService.start();
 
   // 9. Apagado Limpio y Transaccional (Graceful Shutdown)

@@ -96,14 +96,27 @@ export class StorageProvider {
         });
 
         const gcsUri = `gs://${this.bucketName}/${objectPath}`;
-        const cloudUrl = `https://storage.googleapis.com/${this.bucketName}/${objectPath}`;
+        let publicUrl = `https://storage.googleapis.com/${this.bucketName}/${objectPath}`;
+
+        try {
+          if (typeof file.getSignedUrl === 'function') {
+            const [signedUrl] = await file.getSignedUrl({
+              version: 'v4',
+              action: 'read',
+              expires: Date.now() + 15 * 60 * 1000, // 15 minutos de vigencia segura
+            });
+            if (signedUrl) publicUrl = signedUrl;
+          }
+        } catch (signErr) {
+          console.warn('[StorageProvider] No se pudo generar Signed URL:', signErr.message);
+        }
 
         return {
           fileName,
           originalName,
           filePath: gcsUri,
-          cloudUrl,
-          publicUrl: cloudUrl,
+          cloudUrl: publicUrl,
+          publicUrl,
           fileSize: buffer.length,
           mimeType,
           isCloud: true,
@@ -180,6 +193,30 @@ export class StorageProvider {
     } catch {
       return false;
     }
+  }
+
+  async getSignedUrl(filePath, expiresInMs = 15 * 60 * 1000) {
+    if (filePath && filePath.startsWith('gs://')) {
+      const withoutPrefix = filePath.replace(/^gs:\/\//, '');
+      const firstSlash = withoutPrefix.indexOf('/');
+      const bucketName = firstSlash !== -1 ? withoutPrefix.slice(0, firstSlash) : this.bucketName;
+      const objectPath = firstSlash !== -1 ? withoutPrefix.slice(firstSlash + 1) : withoutPrefix;
+
+      const gcs = await this._getGcsClient();
+      if (gcs) {
+        const bucket = gcs.bucket(bucketName);
+        const file = bucket.file(objectPath);
+        if (typeof file.getSignedUrl === 'function') {
+          const [url] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'read',
+            expires: Date.now() + expiresInMs,
+          });
+          return url;
+        }
+      }
+    }
+    return null;
   }
 
   _guessExtension(mimeType) {
