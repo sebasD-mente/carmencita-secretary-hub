@@ -111,11 +111,21 @@ export const SaveDocumentActionSchema = z.object({
   invoice: InvoiceMetadataSchema.optional().nullable(),
 });
 
+export const CreateCalendarEventActionSchema = z.object({
+  action: z.literal('CREATE_CALENDAR_EVENT'),
+  summary: z.string().min(1, 'El resumen o título del evento es obligatorio'),
+  startDateTime: z.string().min(1, 'La fecha y hora de inicio es obligatoria'),
+  endDateTime: z.string().optional().nullable(),
+  description: z.string().optional().nullable(),
+  location: z.string().optional().nullable(),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
   SaveIdeaActionSchema,
   SaveTaskActionSchema,
+  CreateCalendarEventActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

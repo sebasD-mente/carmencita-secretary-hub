@@ -40,4 +40,12 @@ export const config = {
     modelName: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
     agyBinPath: process.env.AGY_BIN_PATH || 'agy',
   },
+
+  // Google Workspace & Cloud Storage
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    refreshToken: process.env.GOOGLE_REFRESH_TOKEN || '',
+    bucketName: process.env.GCS_BUCKET_NAME || 'carmencita-vault-deko',
+  },
 };

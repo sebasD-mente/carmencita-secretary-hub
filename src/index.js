@@ -8,6 +8,8 @@ import { documentService } from './services/document.service.js';
 import { taskService } from './services/task.service.js';
 import { ideaService } from './services/idea.service.js';
 import { excelService } from './services/excel.service.js';
+import { defaultCalendarService } from './services/calendar.service.js';
+import { schedulerService } from './services/scheduler.service.js';
 import { AgyBridge } from './core/agy-bridge.js';
 import { CarmencitaBrain } from './core/brain.js';
 import { TelegramAdapter } from './adapters/telegram.js';
@@ -52,6 +54,7 @@ async function main() {
       taskService,
       ideaService,
       excelService,
+      calendarService: defaultCalendarService,
     },
     agyBridge
   );
@@ -89,9 +92,15 @@ async function main() {
     await telegramAdapter.start();
   }
 
-  // 8. Apagado Limpio y Transaccional (Graceful Shutdown)
+  // 8. Arrancar Motor Proactivo de Recordatorios (Heartbeat Scheduler)
+  schedulerService.telegramAdapter = telegramAdapter;
+  schedulerService.prisma = prisma;
+  schedulerService.start();
+
+  // 9. Apagado Limpio y Transaccional (Graceful Shutdown)
   const shutdown = async (signal) => {
     console.log(`\n🛑 Recibida señal ${signal}. Apagando Carmencita Hub limpiamente...`);
+    schedulerService.stop();
     await telegramAdapter.stop();
     await fastify.close();
     try {

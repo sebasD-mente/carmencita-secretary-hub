@@ -18,6 +18,8 @@ import { registerRoutes } from '../src/routes/webhooks.js';
 import { setPrismaClient } from '../src/core/prisma.js';
 import { runMigration } from '../scripts/migrate-json-to-prisma.js';
 import { AgyBridge } from '../src/core/agy-bridge.js';
+import { SchedulerService } from '../src/services/scheduler.service.js';
+import { CalendarService } from '../src/services/calendar.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,14 +121,22 @@ class MockPrismaClient {
           status: 'PENDIENTE',
           priority: 'MEDIA',
           createdAt: data.createdAt || new Date(),
+          notifiedAt: data.notifiedAt || null,
           ...data,
         };
         this._data.tasks.unshift(item);
         return item;
       },
-      findMany: async ({ where = {}, take = 50 } = {}) => {
+      findMany: async ({ where = {}, take = 50, orderBy = [] } = {}) => {
         let res = [...this._data.tasks];
         if (where.status) res = res.filter((t) => t.status === where.status);
+        if (where.notifiedAt === null) {
+          res = res.filter((t) => t.notifiedAt === null || t.notifiedAt === undefined);
+        }
+        if (where.dueDate?.lte) {
+          const lteDate = new Date(where.dueDate.lte);
+          res = res.filter((t) => t.dueDate && new Date(t.dueDate) <= lteDate);
+        }
         return res.slice(0, take);
       },
       findUnique: async ({ where }) => {
@@ -708,6 +718,219 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     // Resumen al pie
     const footerCell = worksheet.getCell(8, 1);
     assert.ok(footerCell.value.includes('Plantilla estructurada lista para ingresar costos reales'));
+  });
+
+  await t.test('12. Desacoplamiento Multimedia con GCS (Bóveda Desacoplada sin Basura en Disco)', async () => {
+    const uploadedObjects = new Map();
+    let deletedObjects = [];
+
+    // Mock del cliente de Google Cloud Storage con interfaz exacta
+    const mockGcsClient = {
+      bucket: (bucketName) => ({
+        file: (objectPath) => ({
+          save: async (buffer, opts) => {
+            uploadedObjects.set(`${bucketName}/${objectPath}`, { buffer, opts });
+          },
+          download: async () => {
+            const item = uploadedObjects.get(`${bucketName}/${objectPath}`);
+            if (!item) throw new Error('Object not found in GCS mock');
+            return [item.buffer];
+          },
+          delete: async () => {
+            deletedObjects.push(`${bucketName}/${objectPath}`);
+            uploadedObjects.delete(`${bucketName}/${objectPath}`);
+            return true;
+          },
+        }),
+      }),
+    };
+
+    const gcsStorageProvider = new StorageProvider({
+      baseDir: testDataDir,
+      bucketName: 'carmencita-vault-deko',
+      gcsClient: mockGcsClient,
+    });
+
+    assert.equal(gcsStorageProvider.isCloudEnabled(), true, 'Debe activar modo cloud si hay gcsClient');
+
+    const fakePdf = Buffer.from('%PDF-1.4 Factura cloud en GCS...');
+    const result = await gcsStorageProvider.saveFile({
+      buffer: fakePdf,
+      originalName: 'recibo_dokploy_vps.pdf',
+      mimeType: 'application/pdf',
+      subDir: 'facturas',
+    });
+
+    // 1. Verificación de ruta gs:// y URL pública
+    assert.equal(result.isCloud, true);
+    assert.ok(result.filePath.startsWith('gs://carmencita-vault-deko/facturas/'));
+    assert.ok(result.cloudUrl.startsWith('https://storage.googleapis.com/carmencita-vault-deko/facturas/'));
+    assert.equal(result.fileSize, fakePdf.length);
+
+    // 2. Verificación de CERO bytes en el disco local del VPS
+    const localDirExists = await fs.access(path.join(testDataDir, 'facturas')).then(() => true).catch(() => false);
+    assert.equal(localDirExists, false, 'No deben crearse carpetas ni archivos multimedia permanentes en disco local en modo GCS');
+
+    // 3. Verificación de lectura remota desde GCS
+    const downloadedBuffer = await gcsStorageProvider.readFile(result.filePath);
+    assert.deepEqual(downloadedBuffer, fakePdf);
+
+    // 4. Verificación de eliminación en GCS
+    const deleted = await gcsStorageProvider.deleteFile(result.filePath);
+    assert.equal(deleted, true);
+    assert.ok(deletedObjects.some((o) => o.includes('recibo_dokploy_vps')));
+  });
+
+  await t.test('13. Motor Proactivo de Recordatorios: SchedulerService con Notificación a Telegram y Marcado notifiedAt', async () => {
+    const now = new Date();
+    const pastDueDate = new Date(now.getTime() - 10 * 60 * 1000); // 10 minutos en el pasado
+    const futureDueDate = new Date(now.getTime() + 60 * 60 * 1000); // 1 hora en el futuro
+
+    // 1. Crear una tarea vencida pendiente de notificación
+    const pastTask = await mockPrisma.task.create({
+      data: {
+        description: 'Renovar certificado SSL de Dokploy',
+        dueDate: pastDueDate,
+        priority: 'ALTA',
+        status: 'PENDIENTE',
+        notifiedAt: null,
+      },
+    });
+
+    // 2. Crear una tarea futura que NO debe ser notificada todavía
+    const futureTask = await mockPrisma.task.create({
+      data: {
+        description: 'Revisión trimestral de inventario',
+        dueDate: futureDueDate,
+        priority: 'BAJA',
+        status: 'PENDIENTE',
+        notifiedAt: null,
+      },
+    });
+
+    const capturedNotifications = [];
+    const mockTelegramAdapter = {
+      sendMessage: async (chatId, text) => {
+        capturedNotifications.push({ chatId, text });
+        return true;
+      },
+    };
+
+    const scheduler = new SchedulerService({
+      prisma: mockPrisma,
+      telegramAdapter: mockTelegramAdapter,
+      intervalMs: 1000,
+    });
+
+    // Ejecutar verificación de tareas pendientes
+    const notifiedTasks = await scheduler.checkPendingTasks(now);
+
+    // 1. Debe haber notificado únicamente la tarea vencida
+    assert.equal(notifiedTasks.length, 1);
+    assert.equal(notifiedTasks[0].id, pastTask.id);
+    assert.ok(notifiedTasks[0].notifiedAt instanceof Date);
+
+    // 2. Validar formato exacto del mensaje proactivo de Carmencita
+    assert.equal(capturedNotifications.length, 1);
+    const sentMsg = capturedNotifications[0].text;
+    assert.ok(sentMsg.includes('🔔 ¡Sebastián, recordatorio de Carmencita!'));
+    assert.ok(sentMsg.includes('📌 Tarea: Renovar certificado SSL de Dokploy'));
+    assert.ok(sentMsg.includes('🔥 Prioridad: ALTA'));
+    assert.ok(sentMsg.includes('¿Deseas que la marque como completada o la pospongo?'));
+
+    // 3. Validar que la tarea futura NO fue notificada
+    const freshFuture = await mockPrisma.task.findUnique({ where: { id: futureTask.id } });
+    assert.equal(freshFuture.notifiedAt, null);
+
+    // 4. Idempotencia y prevención de spam: segunda ejecución no debe re-notificar la misma tarea
+    const secondPass = await scheduler.checkPendingTasks(now);
+    assert.equal(secondPass.length, 0, 'No debe re-notificar tareas que ya tienen notifiedAt');
+  });
+
+  await t.test('14. Sincronización con Google Calendar: CalendarService y Acción CREATE_CALENDAR_EVENT en CarmencitaBrain', async () => {
+    let insertedEventResource = null;
+    const mockCalendarClient = {
+      events: {
+        insert: async ({ calendarId, requestBody }) => {
+          insertedEventResource = { calendarId, ...requestBody };
+          return {
+            data: {
+              id: 'cal_event_78910',
+              summary: requestBody.summary,
+              start: requestBody.start,
+              end: requestBody.end,
+              htmlLink: 'https://calendar.google.com/calendar/event?eid=cal_event_78910',
+              status: 'confirmed',
+            },
+          };
+        },
+        list: async ({ calendarId }) => {
+          return {
+            data: {
+              items: [
+                {
+                  id: 'cal_event_1',
+                  summary: 'Reunión Creativa Feria Diseño',
+                  start: { dateTime: '2026-10-02T10:00:00Z' },
+                  end: { dateTime: '2026-10-02T11:30:00Z' },
+                  htmlLink: 'https://calendar.google.com/calendar/event?eid=1',
+                  location: 'Ciudad de Guatemala',
+                },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const calendarService = new CalendarService({
+      calendarClient: mockCalendarClient,
+    });
+
+    // 1. Prueba unitaria de CalendarService
+    const created = await calendarService.createEvent({
+      summary: 'Almuerzo con Proveedor Vintage',
+      description: 'Discutir precios de candelabros y consolas',
+      startDateTime: '2026-10-03T13:00:00Z',
+      endDateTime: '2026-10-03T14:30:00Z',
+      location: 'Restaurante Portal del Ángel',
+    });
+
+    assert.equal(created.id, 'cal_event_78910');
+    assert.equal(created.summary, 'Almuerzo con Proveedor Vintage');
+    assert.equal(created.htmlLink, 'https://calendar.google.com/calendar/event?eid=cal_event_78910');
+    assert.equal(insertedEventResource.summary, 'Almuerzo con Proveedor Vintage');
+
+    // 2. Listar eventos próximos
+    const upcoming = await calendarService.listUpcomingEvents({ maxResults: 5 });
+    assert.equal(upcoming.length, 1);
+    assert.equal(upcoming[0].summary, 'Reunión Creativa Feria Diseño');
+
+    // 3. Integración en CarmencitaBrain con acción CREATE_CALENDAR_EVENT
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      calendarService,
+    });
+
+    const modelCalendarOutput = `¡Por supuesto, Sebastián! Te agendé la reunión en tu Google Calendar para que no se te pase.
+
+\`\`\`json
+{"action": "CREATE_CALENDAR_EVENT", "summary": "Sesión de Fotos Catálogo Otoño", "startDateTime": "2026-10-04T09:00:00Z", "endDateTime": "2026-10-04T12:00:00Z", "location": "Estudio Deko Labs"}
+\`\`\``;
+
+    const actionResult = await brain._executeExtractedActions(modelCalendarOutput);
+
+    // Verificaciones de respuesta ejecutiva sin fugas de sintaxis JSON
+    assert.ok(!actionResult.reply.includes('```json'));
+    assert.ok(actionResult.reply.includes('¡Cita agendada en tu Google Calendar!'));
+    assert.ok(actionResult.reply.includes('Sesión de Fotos Catálogo Otoño'));
+    assert.ok(actionResult.reply.includes('https://calendar.google.com/calendar/event?eid=cal_event_78910'));
+    assert.equal(actionResult.hasCalendarEvent, true);
+    assert.equal(actionResult.calendarEvent.id, 'cal_event_78910');
   });
 
   // Limpieza final

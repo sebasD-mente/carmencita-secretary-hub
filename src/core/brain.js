@@ -5,6 +5,7 @@ import { documentService as defaultDocService } from '../services/document.servi
 import { taskService as defaultTaskService } from '../services/task.service.js';
 import { ideaService as defaultIdeaService } from '../services/idea.service.js';
 import { excelService as defaultExcelService } from '../services/excel.service.js';
+import { defaultCalendarService } from '../services/calendar.service.js';
 import { parseCarmencitaAction } from '../validators/actions.schema.js';
 
 function makeActionResult(opts) {
@@ -12,6 +13,8 @@ function makeActionResult(opts) {
     reply: opts.reply,
     hasAsyncAction: opts.hasAsyncAction || false,
     hasExcel: opts.hasExcel || false,
+    hasCalendarEvent: opts.hasCalendarEvent || false,
+    calendarEvent: opts.calendarEvent || null,
     excelFile: opts.excelFile || null,
     fullHistoryText: opts.fullHistoryText || opts.reply,
     actionData: opts.actionData || null,
@@ -31,6 +34,7 @@ export class CarmencitaBrain {
     this.taskService = deps?.taskService || defaultTaskService;
     this.ideaService = deps?.ideaService || defaultIdeaService;
     this.excelService = deps?.excelService || defaultExcelService;
+    this.calendarService = deps?.calendarService || defaultCalendarService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
 
     this.ai = deps?.ai || null;
@@ -78,6 +82,7 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Hoja de cálculo Excel: {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DD", "priority": "ALTA|MEDIA|BAJA"}
+- Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 
 TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
   }
@@ -389,6 +394,46 @@ Responde únicamente con un objeto JSON:
         excelFile,
         fullHistoryText: `${cleanText}\n[Archivo Excel generado: ${excelFile.fileName}]`,
         actionData: parsedAction,
+      });
+    }
+
+    if (parsedAction.action === 'CREATE_CALENDAR_EVENT') {
+      let eventResult = null;
+      let errorMsg = null;
+      try {
+        if (this.calendarService) {
+          eventResult = await this.calendarService.createEvent({
+            summary: parsedAction.summary,
+            description: parsedAction.description,
+            startDateTime: parsedAction.startDateTime,
+            endDateTime: parsedAction.endDateTime,
+            location: parsedAction.location,
+          });
+        }
+      } catch (calErr) {
+        console.error('[Brain] Error agendando en Google Calendar:', calErr.message);
+        errorMsg = calErr.message;
+      }
+
+      const link = eventResult?.htmlLink || 'https://calendar.google.com';
+      let calendarReply = '';
+      if (eventResult) {
+        calendarReply = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡Cita agendada en tu Google Calendar!</b>\n\n` +
+          `📌 <b>Evento:</b> ${eventResult.summary}\n` +
+          `⏰ <b>Inicio:</b> ${eventResult.start}\n` +
+          (eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : '') +
+          (parsedAction.location ? `📍 <b>Ubicación:</b> ${parsedAction.location}\n` : '') +
+          `🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
+      } else {
+        calendarReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude sincronizar con Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
+      }
+
+      return makeActionResult({
+        reply: calendarReply,
+        hasCalendarEvent: Boolean(eventResult),
+        calendarEvent: eventResult,
+        actionData: parsedAction,
+        fullHistoryText: `${cleanText}\n[Evento agendado en Google Calendar: ${parsedAction.summary} (${link})]`,
       });
     }
 

@@ -78,6 +78,7 @@ model Task {
   status      TaskStatus @default(PENDIENTE)
   createdAt   DateTime   @default(now())
   completedAt DateTime?
+  notifiedAt  DateTime?
 
   @@index([status, dueDate])
 }

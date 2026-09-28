@@ -1,7 +1,11 @@
 node_modules/
 .env
+.env.*
+!.env.example
 data_test/
 *.log
+*.token.json
+credentials.json
 data/facturas/*
 !data/facturas/.gitkeep
 data/documentos/*
