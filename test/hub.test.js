@@ -203,8 +203,11 @@ class MockPrismaClient {
         this._data.messageLogs.unshift(item);
         return item;
       },
-      findMany: async ({ take = 50 } = {}) => {
-        return this._data.messageLogs.slice(0, take);
+      findMany: async ({ where = {}, take = 50 } = {}) => {
+        let res = [...this._data.messageLogs];
+        if (where.channel) res = res.filter((m) => m.channel === where.channel);
+        if (where.senderId) res = res.filter((m) => m.senderId === where.senderId);
+        return res.slice(0, take);
       },
     };
 
@@ -1329,6 +1332,240 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(calList[0].summary, 'Cita con Mario Rossi');
 
     await app.close();
+  });
+
+  await t.test('20. Parser de Rescate Temporal Heurístico en TaskService (_parseRelativeTime y Fallback en createTask)', async () => {
+    // 1. Rescate de "en 2 horas" desde la descripción
+    const task2h = await taskService.createTask({
+      description: 'Comprar pilas en 2 horas',
+      priority: 'ALTA',
+    });
+    assert.ok(task2h.id);
+    assert.ok(task2h.dueDate instanceof Date, 'dueDate debe ser instancia de Date rescatada');
+    const diff2h = task2h.dueDate.getTime() - Date.now();
+    assert.ok(diff2h > 7100000 && diff2h < 7300000, `Debe estar programada para dentro de ~2 horas (diff: ${diff2h}ms)`);
+
+    // 2. Rescate de "en 30 minutos" con due explícito vacío (simulando omisión del LLM)
+    const task30m = await taskService.createTask({
+      description: 'Revisar servidor en 30 minutos',
+      due: '',
+      priority: 'MEDIA',
+    });
+    assert.ok(task30m.dueDate instanceof Date);
+    const diff30m = task30m.dueDate.getTime() - Date.now();
+    assert.ok(diff30m > 1700000 && diff30m < 1900000, `Debe estar programada para dentro de ~30 minutos (diff: ${diff30m}ms)`);
+
+    // 3. Rescate de "a las 7:00 PM"
+    const task7pm = await taskService.createTask({
+      description: 'Tomar curso a las 7:00 PM',
+      due: null,
+    });
+    assert.ok(task7pm.dueDate instanceof Date);
+    assert.equal(task7pm.dueDate.getHours(), 19);
+    assert.equal(task7pm.dueDate.getMinutes(), 0);
+
+    // 4. Verificación matemática exacta con baseDate fija en _parseRelativeTime
+    const fixedBase = new Date('2026-09-28T10:00:00.000Z');
+    const parsedHours = taskService._parseRelativeTime('Llamar al carpintero dentro de 4 horas', fixedBase);
+    assert.equal(parsedHours.getTime(), fixedBase.getTime() + 4 * 60 * 60 * 1000);
+
+    const parsedMins = taskService._parseRelativeTime('Verificar horno en 45 minutos', fixedBase);
+    assert.equal(parsedMins.getTime(), fixedBase.getTime() + 45 * 60 * 1000);
+
+    const parsedFixedTime = taskService._parseRelativeTime('Reunión a las 11:30 am', fixedBase);
+    assert.equal(parsedFixedTime.getHours(), 11);
+    assert.equal(parsedFixedTime.getMinutes(), 30);
+  });
+
+  await t.test('21. Inyección de Reloj Vivo de Guatemala en Prompt y Filtrado de Contexto por Sesión en CarmencitaBrain', async () => {
+    let capturedPrompt = null;
+    let capturedInstruction = null;
+
+    const mockAiTime = {
+      models: {
+        generateContent: async ({ config: genConfig, contents }) => {
+          capturedInstruction = genConfig?.systemInstruction;
+          capturedPrompt = contents[0];
+          return { text: '¡Entendido Sebastián, programado!' };
+        },
+      },
+    };
+
+    const brainTime = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      ai: mockAiTime,
+    });
+
+    // 1. Verificar directiva temporal en System Prompt
+    const systemPrompt = brainTime.getSystemPrompt();
+    assert.ok(systemPrompt.includes('DIRECTIVA DE TIEMPO Y PROGRAMACIÓN DE RECORDATORIOS (SAVE_TASK)'));
+    assert.ok(systemPrompt.includes('Conoces la fecha y hora actual exacta en Guatemala'));
+    assert.ok(systemPrompt.includes('calcula matemáticamente la fecha y hora exacta absoluta'));
+    assert.ok(systemPrompt.includes('YYYY-MM-DDTHH:mm:ss'));
+
+    // 2. Ejecutar procesamiento de texto y validar inyección de reloj en contextPrompt
+    await brainTime.processTextMessage({
+      channel: 'telegram',
+      senderId: 'tg_user_sebas_1',
+      senderName: 'Sebastián',
+      text: 'Recuérdame comprar pintura en 2 horas',
+    });
+
+    assert.ok(capturedPrompt.includes('CONTEXTO TEMPORAL DEL SISTEMA:'));
+    assert.ok(capturedPrompt.includes('Fecha y hora actual en Guatemala:'));
+    assert.ok(capturedPrompt.includes('America/Guatemala / UTC-6'));
+    assert.ok(capturedPrompt.includes('Timestamp ISO 8601:'));
+
+    // 3. Verificar aislamiento estricto de historial por canal y senderId en _getRecentContext
+    await mockPrisma.messageLog.create({
+      data: {
+        channel: 'whatsapp',
+        senderId: '50299998888',
+        senderName: 'Cliente Externo',
+        role: 'user',
+        content: 'Mensaje de WhatsApp ajeno',
+      },
+    });
+
+    const tgContext = await brainTime._getRecentContext('telegram', 'tg_user_sebas_1');
+    assert.ok(tgContext.recentMessages.every((m) => m.channel === 'telegram' && m.senderId === 'tg_user_sebas_1'));
+    assert.ok(!tgContext.recentMessages.some((m) => m.content.includes('Mensaje de WhatsApp ajeno')));
+  });
+
+  await t.test('22. Sellado de Webhook de WhatsApp y Autenticación Mandatoria de /api/* en Producción', async () => {
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    let webhookPayloadReceived = null;
+    const mockWhatsAppAdapter = {
+      handleWebhook: async (payload) => {
+        webhookPayloadReceived = payload;
+        return { status: 'ok_authenticated' };
+      },
+    };
+
+    const app = Fastify();
+    registerRoutes(app, {
+      brain,
+      documentService,
+      taskService,
+      ideaService,
+      whatsappAdapter: mockWhatsAppAdapter,
+    });
+
+    const origWhatsAppApiKey = config.whatsapp.apiKey;
+    const origApiKey = config.apiKey;
+    const origEnv = process.env.NODE_ENV;
+
+    try {
+      config.whatsapp.apiKey = 'wh-secret-deko-test-2026';
+
+      // 1. Rechazo 401 si falta cabecera en webhook de WhatsApp
+      const noHeaderRes = await app.inject({
+        method: 'POST',
+        url: '/webhooks/whatsapp',
+        payload: { event: 'messages.upsert' },
+      });
+      assert.equal(noHeaderRes.statusCode, 401);
+      assert.ok(noHeaderRes.json().error.includes('Webhook secret inválido o ausente'));
+
+      // 2. Rechazo 401 si la cabecera es incorrecta
+      const badHeaderRes = await app.inject({
+        method: 'POST',
+        url: '/webhooks/whatsapp',
+        headers: { apikey: 'clave_falsa' },
+        payload: { event: 'messages.upsert' },
+      });
+      assert.equal(badHeaderRes.statusCode, 401);
+
+      // 3. Aprobación 200 con cabecera apikey válida
+      const okHeaderRes = await app.inject({
+        method: 'POST',
+        url: '/webhooks/whatsapp',
+        headers: { apikey: 'wh-secret-deko-test-2026' },
+        payload: { event: 'messages.upsert', data: { test: true } },
+      });
+      assert.equal(okHeaderRes.statusCode, 200);
+      assert.equal(okHeaderRes.json().status, 'ok_authenticated');
+
+      // 4. Autenticación estricta en producción para /api/*
+      process.env.NODE_ENV = 'production';
+      config.apiKey = 'carmencita-prod-super-secret-key';
+
+      // Rechazo sin token
+      const prodNoToken = await app.inject({ method: 'GET', url: '/api/facturas' });
+      assert.equal(prodNoToken.statusCode, 401);
+      assert.ok(prodNoToken.json().error.includes('Acceso no autorizado'));
+
+      // Rechazo con token incorrecto
+      const prodBadToken = await app.inject({
+        method: 'GET',
+        url: '/api/facturas',
+        headers: { authorization: 'Bearer token-equivocado' },
+      });
+      assert.equal(prodBadToken.statusCode, 401);
+
+      // Aprobación con Bearer token correcto
+      const prodOkToken = await app.inject({
+        method: 'GET',
+        url: '/api/facturas',
+        headers: { authorization: 'Bearer carmencita-prod-super-secret-key' },
+      });
+      assert.equal(prodOkToken.statusCode, 200);
+    } finally {
+      config.whatsapp.apiKey = origWhatsAppApiKey;
+      config.apiKey = origApiKey;
+      process.env.NODE_ENV = origEnv;
+      await app.close();
+    }
+  });
+
+  await t.test('23. Denegación por Omisión (Deny-by-Default) en Telegram Adapter en Producción', async () => {
+    const origEnv = process.env.NODE_ENV;
+    const origAllowed = config.telegram.allowedUsers;
+    const origToken = config.telegram.token;
+
+    try {
+      process.env.NODE_ENV = 'production';
+      config.telegram.allowedUsers = [];
+      config.telegram.token = 'fake_telegram_bot_token_12345';
+
+      const telegramAdapter = new TelegramAdapter({}, null);
+      telegramAdapter.init();
+
+      let nextCalled = false;
+      let replySent = null;
+
+      const fakeCtx = {
+        from: { id: 987654321, first_name: 'Desconocido' },
+        reply: async (msg) => {
+          replySent = msg;
+        },
+      };
+
+      // Extraer y ejecutar el middleware registrado en bot.use
+      const middleware = telegramAdapter.bot.middleware();
+      await middleware(fakeCtx, async () => {
+        nextCalled = true;
+      });
+
+      // Validar rechazo y que jamás se invoque next()
+      assert.equal(nextCalled, false, 'En producción con whitelist vacía, next() NO debe ejecutarse');
+      assert.ok(replySent.includes('Acceso restringido'));
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      config.telegram.allowedUsers = origAllowed;
+      config.telegram.token = origToken;
+    }
   });
 
   // Limpieza final

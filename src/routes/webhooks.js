@@ -9,12 +9,12 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
       const apiKeyHeader = request.headers['x-api-key'];
       const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : apiKeyHeader;
       const expectedKey = config.apiKey || process.env.CARMENCITA_API_KEY;
+      const isProd = process.env.NODE_ENV === 'production';
 
-      // Si hay una API Key configurada o se está en modo producción, exigir autenticación obligatoria
-      if (expectedKey) {
-        if (!token || token !== expectedKey) {
+      if (isProd || expectedKey) {
+        if (!token || !expectedKey || token !== expectedKey) {
           return reply.code(401).send({
-            error: 'Acceso no autorizado. Se requiere cabecera Authorization: Bearer <CARMENCITA_API_KEY> o x-api-key.',
+            error: 'Acceso no autorizado. Se requiere cabecera Authorization: Bearer <CARMENCITA_API_KEY> o x-api-key válida.',
           });
         }
       }
@@ -51,8 +51,8 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
     // Verificación de autenticidad del webhook
     if (config.whatsapp.apiKey) {
       const receivedKey = request.headers['apikey'] || request.headers['x-api-key'] || request.headers['x-webhook-secret'];
-      if (receivedKey && receivedKey !== config.whatsapp.apiKey) {
-        return reply.code(401).send({ error: 'Webhook secret no autorizado.' });
+      if (!receivedKey || receivedKey !== config.whatsapp.apiKey) {
+        return reply.code(401).send({ error: 'Acceso no autorizado: Webhook secret inválido o ausente.' });
       }
     }
 

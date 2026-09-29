@@ -84,11 +84,17 @@ DIRECTIVA DE AUTONOMÍA E INVISIBILIDAD DE HERRAMIENTAS:
 - Si Sebastián pide tareas técnicas, servidores, Docker, Dokploy, logs o git, toma la iniciativa de forma 100% autónoma y transparente. Sebastián NO tiene que mencionar jamás a "AGY".
 - Responde siempre con confirmación ejecutiva humana natural seguida del bloque JSON de acción correspondiente.
 
+DIRECTIVA DE TIEMPO Y PROGRAMACIÓN DE RECORDATORIOS (SAVE_TASK):
+- Conoces la fecha y hora actual exacta en Guatemala.
+- Cuando Sebastián mencione tiempos relativos ("en 2 horas", "en 30 minutos", "a las 5:00 PM", "mañana a las 9am"), calcula matemáticamente la fecha y hora exacta absoluta.
+- Emite SIEMPRE el campo "due" o "dueDate" en formato ISO 8601 completo: "YYYY-MM-DDTHH:mm:ss".
+- PROHIBIDO emitir cadenas vacías "" en "due" para tareas con horario programado.
+
 ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
 - Hoja de cálculo Excel: {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
-- Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DD", "priority": "ALTA|MEDIA|BAJA"}
+- Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
@@ -118,12 +124,19 @@ TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
     }
   }
 
-  async _getRecentContext() {
+  async _getRecentContext(channel = null, senderId = null) {
     let recentMessages = [];
     let pendingTasks = [];
     try {
       if (this.prisma?.messageLog) {
-        recentMessages = await this.prisma.messageLog.findMany({ orderBy: { createdAt: 'desc' }, take: 6 });
+        const where = {};
+        if (channel) where.channel = channel;
+        if (senderId) where.senderId = String(senderId);
+        recentMessages = await this.prisma.messageLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: 6,
+        });
         recentMessages.reverse();
       }
       if (this.taskService?.listTasks) {
@@ -143,12 +156,28 @@ TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
     }
 
     try {
-      const { recentMessages, pendingTasks } = await this._getRecentContext();
+      const ahoraGuatemala = new Intl.DateTimeFormat('es-GT', {
+        timeZone: 'America/Guatemala',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(new Date());
+      const ahoraIso = new Date().toISOString();
+
+      const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
       const contextPrompt = `
+CONTEXTO TEMPORAL DEL SISTEMA:
+• Fecha y hora actual en Guatemala: ${ahoraGuatemala} (Zona Horaria: America/Guatemala / UTC-6)
+• Timestamp ISO 8601: ${ahoraIso}
+
 CONTEXTO DEL SISTEMA:
-- Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
-- Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}
-- Interacciones recientes:
+• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
+• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}
+• Interacciones recientes:
 ${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}
 
 Mensaje de Sebastián:
@@ -326,11 +355,33 @@ Responde únicamente con un objeto JSON:
     }
 
     try {
+      const ahoraGuatemala = new Intl.DateTimeFormat('es-GT', {
+        timeZone: 'America/Guatemala',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(new Date());
+      const ahoraIso = new Date().toISOString();
+
+      const audioPrompt = `
+CONTEXTO TEMPORAL DEL SISTEMA:
+• Fecha y hora actual en Guatemala: ${ahoraGuatemala} (Zona Horaria: America/Guatemala / UTC-6)
+• Timestamp ISO 8601: ${ahoraIso}
+
+CONTEXTO DEL SISTEMA:
+• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
+
+Escucha atentamente este audio de Sebastián. Transcribe y responde como su asistente ejecutiva Carmencita con iniciativa autónoma. Si requiere acciones, agrega el bloque JSON al final.`;
+
       const response = await this.ai.models.generateContent({
         model: config.ai.modelName,
         config: { systemInstruction: this.getSystemPrompt() },
         contents: [
-          `Escucha atentamente este audio de Sebastián. Transcribe y responde como su asistente ejecutiva Carmencita con iniciativa autónoma. Si requiere acciones, agrega el bloque JSON al final.`,
+          audioPrompt,
           { inlineData: { mimeType: mimeType || 'audio/ogg', data: buffer.toString('base64') } },
         ],
       });

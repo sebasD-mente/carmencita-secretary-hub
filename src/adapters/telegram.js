@@ -17,19 +17,23 @@ export class TelegramAdapter {
 
     this.bot = new Bot(config.telegram.token);
 
-    // Middleware de Seguridad Estricta (Whitelist de Sebastián)
+    // Middleware de Seguridad Estricta (Whitelist de Sebastián - Deny-by-Default)
     this.bot.use(async (ctx, next) => {
       const fromId = String(ctx.from?.id || '');
       const fromName = ctx.from?.first_name || 'Desconocido';
+      const isProd = process.env.NODE_ENV === 'production';
 
-      if (config.telegram.allowedUsers.length > 0) {
-        if (!config.telegram.allowedUsers.includes(fromId)) {
-          console.warn(`[Telegram Security] Acceso denegado: ${fromName} (ID: ${fromId})`);
-          await ctx.reply('🔒 Acceso restringido. Este asistente personal pertenece exclusivamente a Sebastián Jiménez.');
+      if (!config.telegram.allowedUsers || config.telegram.allowedUsers.length === 0) {
+        if (isProd) {
+          console.warn(`[Telegram Security] Whitelist vacía en producción. Acceso bloqueado por omisión para: ${fromName} (${fromId})`);
+          await ctx.reply('🔒 Acceso restringido. Sistema en producción sin lista blanca configurada.');
           return;
         }
-      } else {
         console.log(`\n🔔 TELEGRAM ID DETECTADO: ${fromId} (${fromName})`);
+      } else if (!config.telegram.allowedUsers.includes(fromId)) {
+        console.warn(`[Telegram Security] Acceso denegado: ${fromName} (ID: ${fromId})`);
+        await ctx.reply('🔒 Acceso restringido. Este asistente personal pertenece exclusivamente a Sebastián Jiménez.');
+        return;
       }
 
       await next();

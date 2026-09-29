@@ -9,6 +9,56 @@ export class TaskService {
   }
 
   /**
+   * Parser de rescate temporal heurístico para descripciones con horario relativo o fijo.
+   */
+  _parseRelativeTime(description, baseDate = new Date()) {
+    if (!description || typeof description !== 'string') return null;
+
+    // 1. Horas relativas ("en 2 horas", "dentro de 3 horas")
+    const hoursMatch = description.match(/(?:en|dentro de)\s+(\d+)\s+horas?/i);
+    if (hoursMatch) {
+      const hours = parseInt(hoursMatch[1], 10);
+      if (!isNaN(hours)) {
+        return new Date(baseDate.getTime() + hours * 60 * 60 * 1000);
+      }
+    }
+
+    // 2. Minutos relativos ("en 30 minutos", "dentro de 15 mins")
+    const minutesMatch = description.match(/(?:en|dentro de)\s+(\d+)\s+min(?:uto)?s?/i);
+    if (minutesMatch) {
+      const minutes = parseInt(minutesMatch[1], 10);
+      if (!isNaN(minutes)) {
+        return new Date(baseDate.getTime() + minutes * 60 * 1000);
+      }
+    }
+
+    // 3. Hora fija del día ("a las 7:00 PM", "para las 5 pm", "a las 19:30")
+    const timeMatch = description.match(/(?:a las|para las)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1], 10);
+      const minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+      const meridiem = timeMatch[3]?.toLowerCase();
+
+      if (meridiem === 'pm' && hours < 12) {
+        hours += 12;
+      } else if (meridiem === 'am' && hours === 12) {
+        hours = 0;
+      }
+
+      if (hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
+        const target = new Date(baseDate);
+        target.setHours(hours, minutes, 0, 0);
+        if (target.getTime() <= baseDate.getTime()) {
+          target.setDate(target.getDate() + 1);
+        }
+        return target;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Crea una nueva tarea en PostgreSQL con validación Zod y sincronización opcional con Google Tasks.
    */
   async createTask(data) {
@@ -19,12 +69,20 @@ export class TaskService {
 
     let dueDate = null;
     if (validated.dueDate) {
-      dueDate = new Date(validated.dueDate);
+      const parsed = new Date(validated.dueDate);
+      if (!isNaN(parsed.getTime())) {
+        dueDate = parsed;
+      }
     } else if (validated.due) {
       const parsed = new Date(validated.due);
       if (!isNaN(parsed.getTime())) {
         dueDate = parsed;
       }
+    }
+
+    // Rescate heurístico si el LLM omitió dueDate o envió cadena vacía
+    if (!dueDate) {
+      dueDate = this._parseRelativeTime(validated.description);
     }
 
     const task = await this.prisma.task.create({
