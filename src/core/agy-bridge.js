@@ -50,8 +50,12 @@ export class AgyBridge {
   }
 
   _resolveAgyBinPath(candidate) {
+    // 1. Si existe en disco, usarlo de inmediato
     if (candidate && fs.existsSync(candidate)) return candidate;
-    const commonPaths = ['/root/.local/bin/agy', '/usr/local/bin/agy', candidate || 'agy'];
+    // 2. Si se suministró un candidato explícito para pruebas o ruta forzada que no es el alias genérico 'agy', respetarlo para permitir testeo de fallback
+    if (candidate && candidate !== 'agy') return candidate;
+    // 3. Fallback a rutas comunes conocidas
+    const commonPaths = ['/root/.local/bin/agy', '/usr/local/bin/agy', 'agy'];
     for (const p of commonPaths) {
       if (fs.existsSync(p)) return p;
     }
