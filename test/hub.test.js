@@ -22,6 +22,8 @@ import { SchedulerService } from '../src/services/scheduler.service.js';
 import { CalendarService } from '../src/services/calendar.service.js';
 import { ContactService } from '../src/services/contact.service.js';
 import { GoogleTasksService } from '../src/services/google-tasks.service.js';
+import { EmbeddingService } from '../src/services/embedding.service.js';
+import { SaveMemoryActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
 
 // Setup de configuración y credenciales para pruebas de seguridad
@@ -46,6 +48,7 @@ class MockPrismaClient {
       ideas: [],
       messageLogs: [],
       contacts: [],
+      semanticMemories: [],
     };
 
     this.document = {
@@ -282,6 +285,79 @@ class MockPrismaClient {
   }
 
   async $queryRaw() {
+    return [{ '?column?': 1 }];
+  }
+
+  async $executeRawUnsafe(query, ...params) {
+    if (query.includes('INSERT INTO "SemanticMemory"')) {
+      const category = params[0] || 'GENERAL';
+      const content = params[1] || '';
+      let embedding = [];
+      try {
+        embedding = typeof params[2] === 'string' ? JSON.parse(params[2]) : params[2];
+      } catch {}
+      let metadata = null;
+      try {
+        metadata = params[3] ? (typeof params[3] === 'string' ? JSON.parse(params[3]) : params[3]) : null;
+      } catch {}
+
+      const item = {
+        id: `sm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        category,
+        content,
+        embedding,
+        metadata,
+        createdAt: new Date(),
+      };
+      this._data.semanticMemories.unshift(item);
+      return 1;
+    }
+    return 1;
+  }
+
+  async $queryRawUnsafe(query, ...params) {
+    if (query.includes('FROM "SemanticMemory"')) {
+      let queryVector = [];
+      try {
+        queryVector = typeof params[0] === 'string' ? JSON.parse(params[0]) : params[0];
+      } catch {}
+      const minSimilarity = typeof params[1] === 'number' ? params[1] : 0.55;
+      const limit = typeof params[2] === 'number' ? params[2] : 3;
+
+      const catMatch = query.match(/AND category = '([^']+)'/);
+      const categoryFilter = catMatch ? catMatch[1] : null;
+
+      function cosineSimilarity(a, b) {
+        if (!a || !b || a.length !== b.length) return 0;
+        let dot = 0;
+        let normA = 0;
+        let normB = 0;
+        for (let i = 0; i < a.length; i++) {
+          dot += a[i] * b[i];
+          normA += a[i] * a[i];
+          normB += b[i] * b[i];
+        }
+        if (normA === 0 || normB === 0) return 0;
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+      }
+
+      const results = this._data.semanticMemories
+        .filter((m) => m.embedding && m.embedding.length > 0)
+        .filter((m) => !categoryFilter || m.category === categoryFilter)
+        .map((m) => ({
+          id: m.id,
+          category: m.category,
+          content: m.content,
+          metadata: m.metadata,
+          createdAt: m.createdAt,
+          similarity: cosineSimilarity(queryVector, m.embedding),
+        }))
+        .filter((m) => m.similarity >= minSimilarity)
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit);
+
+      return results;
+    }
     return [{ '?column?': 1 }];
   }
 
@@ -1566,6 +1642,233 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       config.telegram.allowedUsers = origAllowed;
       config.telegram.token = origToken;
     }
+  });
+
+  await t.test('24. Memoria Semántica: Generación de Embeddings y Almacenamiento en PostgreSQL (saveMemory)', async () => {
+    // Vector de 768 dimensiones
+    const sampleVector = Array.from({ length: 768 }, (_, i) => Math.sin(i + 1));
+    const mockAi = {
+      models: {
+        embedContent: async ({ model, contents }) => {
+          assert.equal(model, 'text-embedding-004');
+          assert.ok(contents);
+          return { embedding: { values: sampleVector } };
+        },
+      },
+    };
+
+    const embeddingSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAi });
+
+    // 1. Guardar memoria exitosa
+    const saved = await embeddingSvc.saveMemory({
+      content: 'A Sebastián le gusta el café negro sin azúcar a primera hora',
+      category: 'PREFERENCIA',
+      metadata: { source: 'dictado_directo' },
+    });
+
+    assert.equal(saved.success, true);
+    assert.equal(saved.category, 'PREFERENCIA');
+    assert.equal(saved.content, 'A Sebastián le gusta el café negro sin azúcar a primera hora');
+    assert.deepEqual(saved.metadata, { source: 'dictado_directo' });
+
+    // Verificar en mockPrisma que se guardó
+    const stored = mockPrisma._data.semanticMemories[0];
+    assert.ok(stored);
+    assert.equal(stored.category, 'PREFERENCIA');
+    assert.equal(stored.content, 'A Sebastián le gusta el café negro sin azúcar a primera hora');
+    assert.equal(stored.embedding.length, 768);
+
+    // 2. Validación de contenido obligatorio
+    await assert.rejects(
+      async () => embeddingSvc.saveMemory({ content: '', category: 'GENERAL' }),
+      /El contenido del recuerdo es obligatorio/
+    );
+  });
+
+  await t.test('25. Memoria Semántica: Búsqueda Vectorial por Similitud de Coseno y Filtrado por Umbral (searchSimilarMemories)', async () => {
+    // Vectores sintéticos de 768 dimensiones con similitudes predecibles
+    const vecCoffee = Array.from({ length: 768 }, (_, i) => (i < 100 ? 1 : 0));
+    const vecCoffeeQuery = Array.from({ length: 768 }, (_, i) => (i < 100 ? 0.95 : (i === 101 ? 0.05 : 0)));
+    const vecServer = Array.from({ length: 768 }, (_, i) => (i >= 200 && i < 300 ? 1 : 0));
+
+    let currentVectorToReturn = vecCoffee;
+    const mockAi = {
+      models: {
+        embedContent: async ({ contents }) => {
+          if (contents.includes('café') || contents.includes('cafe')) {
+            return { embedding: { values: vecCoffee } };
+          }
+          if (contents.includes('servidor') || contents.includes('dokploy')) {
+            return { embedding: { values: vecServer } };
+          }
+          return { embedding: { values: currentVectorToReturn } };
+        },
+      },
+    };
+
+    const embeddingSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAi });
+
+    // Guardar recuerdos de prueba
+    await embeddingSvc.saveMemory({
+      content: 'Sebastián prefiere café espresso o negro sin azúcar',
+      category: 'PREFERENCIA',
+    });
+    await embeddingSvc.saveMemory({
+      content: 'El servidor de Dokploy corre en el puerto 5433 en el VPS',
+      category: 'DIRECTIVA',
+    });
+
+    // 1. Búsqueda con query afín al café
+    currentVectorToReturn = vecCoffeeQuery;
+    const coffeeResults = await embeddingSvc.searchSimilarMemories('¿Qué café toma Sebastián?', {
+      limit: 3,
+      minSimilarity: 0.55,
+    });
+
+    assert.ok(coffeeResults.length >= 1, 'Debe encontrar al menos 1 resultado similar');
+    assert.equal(coffeeResults[0].category, 'PREFERENCIA');
+    assert.ok(coffeeResults[0].content.includes('café espresso'));
+    assert.ok(coffeeResults[0].similarity >= 0.55, 'La similitud debe superar el umbral');
+
+    // 2. Verificar que el servidor NO aparece en resultados de café por filtro de umbral mínimo
+    const hasServerResult = coffeeResults.some((r) => r.content.includes('Dokploy'));
+    assert.equal(hasServerResult, false, 'Recuerdos no afines deben ser filtrados por umbral de similitud');
+
+    // 3. Filtrado por categoría
+    const prefOnly = await embeddingSvc.searchSimilarMemories('café', {
+      limit: 3,
+      minSimilarity: 0.1,
+      category: 'PREFERENCIA',
+    });
+    assert.ok(prefOnly.every((m) => m.category === 'PREFERENCIA'));
+  });
+
+  await t.test('26. RAG y Memoria a Largo Plazo: Inyección Automática de Recuerdos Relevantes en CarmencitaBrain', async () => {
+    let capturedPrompt = null;
+
+    const mockAi = {
+      models: {
+        generateContent: async ({ contents }) => {
+          capturedPrompt = contents[0];
+          return { text: 'El proveedor Impresos Rápidos nos cobra Q120 por metro de vinil.' };
+        },
+      },
+    };
+
+    const mockEmbeddingSvc = {
+      searchSimilarMemories: async (query) => {
+        if (query.includes('vinil') || query.includes('proveedor')) {
+          return [
+            {
+              id: 'mem_1',
+              category: 'ACUERDO',
+              content: 'Impresos Rápidos cobra Q120 por metro cuadrado de vinil para stands',
+              similarity: 0.92,
+            },
+            {
+              id: 'mem_2',
+              category: 'DIRECTIVA',
+              content: 'Siempre solicitar factura contable en compras de vinil mayores a Q500',
+              similarity: 0.78,
+            },
+          ];
+        }
+        return [];
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAi,
+      embeddingService: mockEmbeddingSvc,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const reply = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: '¿Cuánto nos cobraba el proveedor de vinil para los stands?',
+    });
+
+    // Verificar que el prompt inyectado a Gemini contiene la sección RAG formateada
+    assert.ok(capturedPrompt, 'El contextPrompt debió ser capturado');
+    assert.ok(capturedPrompt.includes('🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):'));
+    assert.ok(capturedPrompt.includes('• [ACUERDO] Impresos Rápidos cobra Q120 por metro cuadrado de vinil para stands'));
+    assert.ok(capturedPrompt.includes('(Afinidad: 92%)'));
+    assert.ok(capturedPrompt.includes('• [DIRECTIVA] Siempre solicitar factura contable en compras de vinil mayores a Q500'));
+    assert.ok(capturedPrompt.includes('(Afinidad: 78%)'));
+    assert.ok(reply.includes('Impresos Rápidos'));
+  });
+
+  await t.test('27. Acción SAVE_MEMORY: Validación Zod con SaveMemoryActionSchema y Ejecución Autónoma en CarmencitaBrain', async () => {
+    // 1. Validación Zod directa
+    const validJson = {
+      action: 'SAVE_MEMORY',
+      content: 'Sebastián no responde mensajes de trabajo los domingos',
+      category: 'PREFERENCIA',
+      reason: 'Directiva explícita de descanso',
+    };
+    const parsed = parseCarmencitaAction(validJson);
+    assert.ok(parsed, 'La acción SAVE_MEMORY debe ser validada exitosamente por Zod');
+    assert.equal(parsed.action, 'SAVE_MEMORY');
+    assert.equal(parsed.category, 'PREFERENCIA');
+    assert.equal(parsed.content, 'Sebastián no responde mensajes de trabajo los domingos');
+
+    // Validación rechaza contenido vacío
+    const invalidJson = { action: 'SAVE_MEMORY', content: '' };
+    assert.equal(parseCarmencitaAction(invalidJson), null);
+
+    // 2. Ejecución integrada en CarmencitaBrain
+    let savedParams = null;
+    const mockEmbeddingSvc = {
+      searchSimilarMemories: async () => [],
+      saveMemory: async (params) => {
+        savedParams = params;
+        return { success: true, ...params };
+      },
+    };
+
+    const mockAi = {
+      models: {
+        generateContent: async () => {
+          return {
+            text: '¡Entendido perfectamente, Sebastián! He guardado tu directiva en mi memoria a largo plazo.\n' +
+              '```json\n{"action": "SAVE_MEMORY", "content": "Sebastián no responde mensajes de trabajo los domingos", "category": "PREFERENCIA"}\n```',
+          };
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAi,
+      embeddingService: mockEmbeddingSvc,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const result = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, recuerda que los domingos no contesto nada de trabajo.',
+    });
+
+    assert.equal(result.hasMemory, true);
+    assert.equal(result.actionData.action, 'SAVE_MEMORY');
+    assert.equal(result.actionData.category, 'PREFERENCIA');
+    assert.ok(!result.reply.includes('SAVE_MEMORY'), 'El JSON debe ser removido de la respuesta limpia');
+    assert.ok(result.reply.includes('¡Entendido perfectamente, Sebastián!'));
+    assert.ok(result.fullHistoryText.includes('[Memoria guardada en bóveda semántica: "Sebastián no responde mensajes de trabajo los domingos"]'));
+    assert.ok(savedParams, 'saveMemory debió haber sido llamado en embeddingService');
+    assert.equal(savedParams.content, 'Sebastián no responde mensajes de trabajo los domingos');
+    assert.equal(savedParams.category, 'PREFERENCIA');
   });
 
   // Limpieza final

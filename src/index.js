@@ -11,6 +11,7 @@ import { excelService } from './services/excel.service.js';
 import { defaultCalendarService } from './services/calendar.service.js';
 import { contactService } from './services/contact.service.js';
 import { defaultGoogleTasksService } from './services/google-tasks.service.js';
+import { embeddingService } from './services/embedding.service.js';
 import { schedulerService } from './services/scheduler.service.js';
 import { AgyBridge } from './core/agy-bridge.js';
 import { CarmencitaBrain } from './core/brain.js';
@@ -59,9 +60,11 @@ async function main() {
       calendarService: defaultCalendarService,
       contactService,
       googleTasksService: defaultGoogleTasksService,
+      embeddingService,
     },
     agyBridge
   );
+
   fastify.log.info(`[Brain] Motor de razonamiento multimodal activo (Modelo: ${config.ai.modelName})`);
 
   // 3. Inicializar Adaptadores Omnicanal

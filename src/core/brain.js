@@ -8,6 +8,7 @@ import { excelService as defaultExcelService } from '../services/excel.service.j
 import { defaultCalendarService } from '../services/calendar.service.js';
 import { contactService as defaultContactService } from '../services/contact.service.js';
 import { defaultGoogleTasksService } from '../services/google-tasks.service.js';
+import { defaultEmbeddingService } from '../services/embedding.service.js';
 import { parseCarmencitaAction } from '../validators/actions.schema.js';
 
 function makeActionResult(opts) {
@@ -21,6 +22,7 @@ function makeActionResult(opts) {
     contact: opts.contact || null,
     contacts: opts.contacts || null,
     excelFile: opts.excelFile || null,
+    hasMemory: opts.hasMemory || false,
     fullHistoryText: opts.fullHistoryText || opts.reply,
     actionData: opts.actionData || null,
     initialAck: opts.initialAck || null,
@@ -42,7 +44,9 @@ export class CarmencitaBrain {
     this.calendarService = deps?.calendarService || defaultCalendarService;
     this.contactService = deps?.contactService || defaultContactService;
     this.googleTasksService = deps?.googleTasksService || defaultGoogleTasksService;
+    this.embeddingService = deps?.embeddingService !== undefined ? deps.embeddingService : defaultEmbeddingService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
+
 
     this.ai = deps?.ai || null;
     if (!this.ai && config.ai.geminiApiKey) {
@@ -90,11 +94,17 @@ DIRECTIVA DE TIEMPO Y PROGRAMACIÓN DE RECORDATORIOS (SAVE_TASK):
 - Emite SIEMPRE el campo "due" o "dueDate" en formato ISO 8601 completo: "YYYY-MM-DDTHH:mm:ss".
 - PROHIBIDO emitir cadenas vacías "" en "due" para tareas con horario programado.
 
+MEMORIA PERMANENTE Y APRENDIZAJE CONTINUO:
+- Tienes acceso a recuerdos recuperados de conversaciones pasadas (RAG). Utilízalos naturalmente sin decir "según mi base de datos".
+- Si Sebastián te da una directiva duradera ("siempre usa X", "recuerda que el cliente Y prefiere Z", "mi horario es W"), además de responderle con calidez humana, emite la acción estructurada:
+  {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
+
 ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
 - Hoja de cálculo Excel: {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
+- Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
@@ -168,6 +178,20 @@ TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
       }).format(new Date());
       const ahoraIso = new Date().toISOString();
 
+      let relevantMemories = [];
+      if (this.embeddingService) {
+        try {
+          relevantMemories = await this.embeddingService.searchSimilarMemories(text, { limit: 3 });
+        } catch (err) {
+          console.warn('[Brain RAG] Error recuperando recuerdos:', err.message);
+        }
+      }
+
+      const memoriesBlock = relevantMemories.length > 0
+        ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):
+${relevantMemories.map(m => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
+        : '';
+
       const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
       const contextPrompt = `
 CONTEXTO TEMPORAL DEL SISTEMA:
@@ -178,11 +202,12 @@ CONTEXTO DEL SISTEMA:
 • Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
 • Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}
 • Interacciones recientes:
-${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}
+${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}${memoriesBlock}
 
 Mensaje de Sebastián:
 "${text}"
 `;
+
 
       const response = await this.ai.models.generateContent({
         model: config.ai.modelName,
@@ -349,7 +374,7 @@ Responde únicamente con un objeto JSON:
     return reply;
   }
 
-  async processAudio({ channel, senderId, senderName, buffer, mimeType, onProgress = null }) {
+  async processAudio({ channel, senderId, senderName, buffer, mimeType, text = '', onProgress = null }) {
     if (!this.ai) {
       return `🎙️ Recibí tu nota de voz, Sebastián. En cuanto conectemos la API de Gemini podré transcribirla y ejecutar las órdenes de inmediato.`;
     }
@@ -367,13 +392,27 @@ Responde únicamente con un objeto JSON:
       }).format(new Date());
       const ahoraIso = new Date().toISOString();
 
+      let relevantMemories = [];
+      if (this.embeddingService && text) {
+        try {
+          relevantMemories = await this.embeddingService.searchSimilarMemories(text, { limit: 3 });
+        } catch (err) {
+          console.warn('[Brain RAG] Error recuperando recuerdos:', err.message);
+        }
+      }
+
+      const memoriesBlock = relevantMemories.length > 0
+        ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):
+${relevantMemories.map(m => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
+        : '';
+
       const audioPrompt = `
 CONTEXTO TEMPORAL DEL SISTEMA:
 • Fecha y hora actual en Guatemala: ${ahoraGuatemala} (Zona Horaria: America/Guatemala / UTC-6)
 • Timestamp ISO 8601: ${ahoraIso}
 
 CONTEXTO DEL SISTEMA:
-• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
+• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})${memoriesBlock}
 
 Escucha atentamente este audio de Sebastián. Transcribe y responde como su asistente ejecutiva Carmencita con iniciativa autónoma. Si requiere acciones, agrega el bloque JSON al final.`;
 
@@ -477,6 +516,22 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
       });
       return makeActionResult({ reply: cleanText, actionData: parsedAction });
     }
+
+    if (parsedAction.action === 'SAVE_MEMORY') {
+      if (this.embeddingService) {
+        await this.embeddingService.saveMemory({
+          content: parsedAction.content,
+          category: parsedAction.category,
+        });
+      }
+      return makeActionResult({
+        reply: cleanText,
+        actionData: parsedAction,
+        hasMemory: true,
+        fullHistoryText: `${cleanText}\n[Memoria guardada en bóveda semántica: "${parsedAction.content}"]`,
+      });
+    }
+
 
     if (parsedAction.action === 'GENERATE_EXCEL') {
       const excelFile = await this.excelService.generateExcelFile({

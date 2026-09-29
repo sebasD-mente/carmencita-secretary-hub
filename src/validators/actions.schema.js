@@ -141,6 +141,13 @@ export const SearchContactActionSchema = z.object({
   query: z.string().min(1, 'El término de búsqueda es obligatorio'),
 });
 
+export const SaveMemoryActionSchema = z.object({
+  action: z.literal('SAVE_MEMORY'),
+  content: z.string().min(1, 'El contenido del recuerdo es obligatorio'),
+  category: z.enum(['PREFERENCIA', 'ACUERDO', 'PROVEEDOR', 'DIRECTIVA', 'GENERAL']).default('GENERAL'),
+  reason: z.string().optional(),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -150,6 +157,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   ListCalendarEventsActionSchema,
   SaveContactActionSchema,
   SearchContactActionSchema,
+  SaveMemoryActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {
@@ -158,3 +166,4 @@ export function parseCarmencitaAction(rawJson) {
   if (result.success) return result.data;
   return null;
 }
+
