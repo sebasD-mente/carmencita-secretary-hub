@@ -46,7 +46,7 @@ export class CarmencitaBrain {
     this.googleTasksService = deps?.googleTasksService || defaultGoogleTasksService;
     this.embeddingService = deps?.embeddingService !== undefined ? deps.embeddingService : defaultEmbeddingService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
-
+    this.modelPool = deps?.modelPool || (config.ai.modelPool?.length ? config.ai.modelPool : [config.ai.modelName]);
 
     this.ai = deps?.ai || null;
     if (!this.ai && config.ai.geminiApiKey) {
@@ -156,6 +156,44 @@ TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
     return { recentMessages, pendingTasks };
   }
 
+  async _generateContentWithFailover({ contents, config: genConfig = {} }) {
+    if (!this.ai) {
+      throw new Error('Motor Gemini no inicializado');
+    }
+
+    const pool = Array.isArray(this.modelPool) && this.modelPool.length > 0
+      ? this.modelPool
+      : [config.ai.modelName || 'gemini-3.8-flash'];
+
+    let lastError = null;
+
+    for (let i = 0; i < pool.length; i++) {
+      const model = pool[i];
+      try {
+        const response = await this.ai.models.generateContent({
+          model,
+          config: genConfig,
+          contents,
+        });
+
+        if (i > 0) {
+          console.warn(`[Brain Failover] Inferencia completada con éxito usando modelo de respaldo: ${model}`);
+        }
+        return response;
+      } catch (err) {
+        lastError = err;
+        console.warn(`[Brain Failover] Falló modelo '${model}' (intento ${i + 1}/${pool.length}): ${err.message}. Evaluando siguiente modelo...`);
+
+        // Si es un error irrecuperable de sintaxis/argumentos cliente (ej: 400 Bad Request por datos corruptos), no tiene sentido probar los demás
+        if (err.status === 400) {
+          throw err;
+        }
+      }
+    }
+
+    throw lastError || new Error('Todos los modelos del pool fallaron');
+  }
+
   async processTextMessage({ channel, senderId, senderName, text, onProgress = null }) {
     await this._logMessage({ channel, senderId, senderName, role: 'user', content: text });
 
@@ -209,10 +247,9 @@ Mensaje de Sebastián:
 `;
 
 
-      const response = await this.ai.models.generateContent({
-        model: config.ai.modelName,
-        config: { systemInstruction: this.getSystemPrompt() },
+      const response = await this._generateContentWithFailover({
         contents: [contextPrompt],
+        config: { systemInstruction: this.getSystemPrompt() },
       });
 
       const replyText = response.text || 'Entendido, Sebastián.';
@@ -263,10 +300,9 @@ Extrae estrictamente este JSON:
   "summary": "Resumen conciso de 2 líneas"
 }`;
 
-      const response = await this.ai.models.generateContent({
-        model: config.ai.modelName,
-        config: { systemInstruction: this.getSystemPrompt() },
+      const response = await this._generateContentWithFailover({
         contents: [prompt, { inlineData: { mimeType, data: buffer.toString('base64') } }],
+        config: { systemInstruction: this.getSystemPrompt() },
       });
 
       let parsed = {};
@@ -329,10 +365,9 @@ Responde únicamente con un objeto JSON:
           contents.push({ inlineData: { mimeType, data: buffer.toString('base64') } });
         }
 
-        const response = await this.ai.models.generateContent({
-          model: config.ai.modelName,
-          config: { systemInstruction: this.getSystemPrompt() },
+        const response = await this._generateContentWithFailover({
           contents,
+          config: { systemInstruction: this.getSystemPrompt() },
         });
 
         const jsonMatch = (response.text || '').match(/\{[\s\S]*\}/);
@@ -416,13 +451,12 @@ CONTEXTO DEL SISTEMA:
 
 Escucha atentamente este audio de Sebastián. Transcribe y responde como su asistente ejecutiva Carmencita con iniciativa autónoma. Si requiere acciones, agrega el bloque JSON al final.`;
 
-      const response = await this.ai.models.generateContent({
-        model: config.ai.modelName,
-        config: { systemInstruction: this.getSystemPrompt() },
+      const response = await this._generateContentWithFailover({
         contents: [
           audioPrompt,
           { inlineData: { mimeType: mimeType || 'audio/ogg', data: buffer.toString('base64') } },
         ],
+        config: { systemInstruction: this.getSystemPrompt() },
       });
 
       const replyText = response.text || 'He escuchado tu nota de voz, Sebastián.';

@@ -1871,6 +1871,96 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(savedParams.category, 'PREFERENCIA');
   });
 
+  await t.test('28. Pool de Modelos con Failover Automático y Resiliencia Multimodal ante 503/429', async () => {
+    const attempts = [];
+    const mockAiFailover = {
+      models: {
+        generateContent: async ({ model }) => {
+          attempts.push(model);
+          if (model === 'gemini-3.8-flash') {
+            const err = new Error('This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.');
+            err.status = 'UNAVAILABLE';
+            err.code = 503;
+            throw err;
+          }
+          if (model === 'gemini-3.7-flash') {
+            return {
+              text: '¡Entendido Sebastián! Ya retomé la tarea tras la conmutación al modelo de respaldo.',
+            };
+          }
+          throw new Error(`Modelo no esperado: ${model}`);
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiFailover,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      modelPool: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+    });
+
+    const result = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Ya compre las pilas puedes terminar esa tarea',
+    });
+
+    // 1. Debe haber intentado primero gemini-3.8-flash y conmutado a gemini-3.7-flash
+    assert.deepEqual(attempts, ['gemini-3.8-flash', 'gemini-3.7-flash']);
+
+    // 2. La respuesta debe provenir del modelo secundario sin mensajes de error
+    assert.ok(result.reply.includes('¡Entendido Sebastián! Ya retomé la tarea tras la conmutación'));
+    assert.ok(!result.reply.includes('error al consultar el motor de IA'));
+
+    // 3. Verificación de retrocompatibilidad: usa config.ai.modelPool por defecto si no se pasa en deps
+    const brainDefaultPool = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiFailover,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    assert.ok(Array.isArray(brainDefaultPool.modelPool));
+    assert.equal(brainDefaultPool.modelPool[0], 'gemini-3.8-flash');
+    assert.ok(brainDefaultPool.modelPool.includes('gemini-3.7-flash'));
+
+    // 4. Verificación de interrupción ante error 400 (Bad Request no recuperable)
+    const attempts400 = [];
+    const mockAi400 = {
+      models: {
+        generateContent: async ({ model }) => {
+          attempts400.push(model);
+          const err = new Error('Bad Request: Invalid argument');
+          err.status = 400;
+          throw err;
+        },
+      },
+    };
+    const brain400 = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAi400,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      modelPool: ['gemini-3.8-flash', 'gemini-3.7-flash'],
+    });
+    const result400 = await brain400.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Mensaje con datos inválidos',
+    });
+    assert.deepEqual(attempts400, ['gemini-3.8-flash'], 'Error 400 no debe conmutar a los siguientes modelos');
+    assert.ok(typeof result400 === 'string' && result400.includes('error al consultar el motor de IA'));
+  });
+
   // Limpieza final
   await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
 });

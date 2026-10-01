@@ -39,6 +39,10 @@ export const config = {
   ai: {
     geminiApiKey: process.env.GEMINI_API_KEY || '',
     modelName: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+    modelPool: (process.env.GEMINI_MODEL_POOL || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest')
+      .split(',')
+      .map(m => m.trim())
+      .filter(Boolean),
     agyBinPath: process.env.AGY_BIN_PATH || '/root/.local/bin/agy',
   },
 
