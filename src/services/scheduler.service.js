@@ -19,6 +19,7 @@ export class SchedulerService {
     this.telegramAdapter = opts.telegramAdapter || null;
     this.calendarService = opts.calendarService || null;
     this.taskService = opts.taskService || null;
+    this.gmailService = opts.gmailService || null;
     this.weatherFetcher = opts.weatherFetcher || null;
     this.intervalMs = opts.intervalMs || 60000;
     this.lastBriefDate = opts.lastBriefDate || null;
@@ -223,6 +224,33 @@ export class SchedulerService {
       ? '• Sin tareas pendientes prioritarias.'
       : tasks.map((t) => `• [ ] ${t.description} [${t.priority || 'MEDIA'}]`).join('\n');
 
+    let unreadEmails = [];
+    if (this.gmailService?.getInboxSummary) {
+      try {
+        const summary = await this.gmailService.getInboxSummary({ maxResults: 5 });
+        unreadEmails = summary?.messages || [];
+      } catch (err) {
+        console.warn('[Scheduler] Error consultando Gmail para briefing:', err.message);
+      }
+    }
+
+    let emailSection = [];
+    if (this.gmailService) {
+      const emailsFormatted = unreadEmails.length === 0
+        ? '• Bandeja al día (sin correos pendientes).'
+        : unreadEmails.map((m) => {
+            const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Desconocido';
+            const snippetClean = m.snippet ? ` - ${m.snippet.slice(0, 80).replace(/\n/g, ' ')}...` : '';
+            return `• [${fromClean}] ${m.subject}${snippetClean}`;
+          }).join('\n');
+
+      emailSection = [
+        `✉️ Bandeja de entrada Gmail (${unreadEmails.length} pendiente${unreadEmails.length === 1 ? '' : 's'}):`,
+        emailsFormatted,
+        '',
+      ];
+    }
+
     const message = [
       '🌅 ¡Buenos días, Sebastián! Carmencita te presenta tu resumen de hoy:',
       '',
@@ -234,6 +262,7 @@ export class SchedulerService {
       '📋 Tareas prioritarias:',
       tasksFormatted,
       '',
+      ...emailSection,
       '¡Que sea un día muy exitoso para Deko Labs!',
     ].join('\n');
 

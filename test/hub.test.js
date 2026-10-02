@@ -24,7 +24,8 @@ import { ContactService } from '../src/services/contact.service.js';
 import { GoogleTasksService } from '../src/services/google-tasks.service.js';
 import { EmbeddingService } from '../src/services/embedding.service.js';
 import { ObsidianDriveService } from '../src/services/obsidian-drive.service.js';
-import { SaveMemoryActionSchema, SaveObsidianNoteActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
+import { GmailService } from '../src/services/gmail.service.js';
+import { SaveMemoryActionSchema, SaveObsidianNoteActionSchema, CheckGmailActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
 
 // Setup de configuración y credenciales para pruebas de seguridad
@@ -2133,6 +2134,194 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       text: 'Anota esto en Obsidian',
     });
     assert.ok(errorResult.reply.includes('No pude sincronizar la nota en Google Drive para Obsidian: Google Drive API 500 Backend Error'));
+  });
+
+  await t.test('30. Integración de Gmail en Briefing Matutino y Consulta On-Demand en CarmencitaBrain (GmailService y CHECK_GMAIL)', async () => {
+    // 0. Validación de Esquema Zod CheckGmailActionSchema
+    const validCheckAction = { action: 'CHECK_GMAIL', maxResults: 5, query: 'is:unread label:INBOX' };
+    const parsedAction = parseCarmencitaAction(validCheckAction);
+    assert.ok(parsedAction, 'CHECK_GMAIL debe ser validado por Zod');
+    assert.equal(parsedAction.action, 'CHECK_GMAIL');
+    assert.equal(parsedAction.maxResults, 5);
+
+    // 1. GmailService Unit: Mock del cliente gmail de googleapis
+    const mockMessagesData = [
+      { id: 'msg_001', threadId: 'thread_001' },
+      { id: 'msg_002', threadId: 'thread_002' },
+    ];
+
+    const mockMessageDetails = {
+      msg_001: {
+        id: 'msg_001',
+        threadId: 'thread_001',
+        snippet: 'Hola Sebastián, confirmamos la entrega del material para el stand...',
+        payload: {
+          headers: [
+            { name: 'From', value: 'Impresos Rápidos <contacto@impresosrapidos.gt>' },
+            { name: 'Subject', value: 'Confirmación de entrega stand' },
+            { name: 'Date', value: 'Thu, 01 Oct 2026 14:30:00 -0600' },
+          ],
+        },
+      },
+      msg_002: {
+        id: 'msg_002',
+        threadId: 'thread_002',
+        snippet: 'Adjunto el comprobante de pago de la factura #5421...',
+        payload: {
+          headers: [
+            { name: 'From', value: 'Cliente VIP <vip@dekolabs.org>' },
+            { name: 'Subject', value: 'Comprobante de transferencia bancaria' },
+            { name: 'Date', value: 'Thu, 01 Oct 2026 15:15:00 -0600' },
+          ],
+        },
+      },
+    };
+
+    const mockGmailClient = {
+      users: {
+        messages: {
+          list: async () => ({
+            data: { messages: mockMessagesData },
+          }),
+          get: async ({ id }) => ({
+            data: mockMessageDetails[id],
+          }),
+        },
+      },
+    };
+
+    const gmailService = new GmailService({ gmailClient: mockGmailClient });
+    assert.equal(gmailService.isConfigured(), true);
+
+    const unread = await gmailService.getUnreadInboxMessages({ maxResults: 5 });
+    assert.equal(unread.length, 2);
+    assert.equal(unread[0].id, 'msg_001');
+    assert.equal(unread[0].from, 'Impresos Rápidos <contacto@impresosrapidos.gt>');
+    assert.equal(unread[0].subject, 'Confirmación de entrega stand');
+    assert.ok(unread[0].snippet.includes('confirmamos la entrega'));
+
+    const summary = await gmailService.getInboxSummary({ maxResults: 5 });
+    assert.equal(summary.totalUnread, 2);
+    assert.equal(summary.messages.length, 2);
+
+    // 2. SchedulerService Integration con Gmail en Morning Brief
+    const schedulerWithGmail = new SchedulerService({
+      prisma: mockPrisma,
+      gmailService,
+      weatherFetcher: async () => '20°C, Soleado',
+    });
+
+    const briefMessage = await schedulerWithGmail.triggerMorningBrief(new Date('2026-10-01T07:00:00-06:00'));
+    assert.ok(briefMessage.includes('✉️ Bandeja de entrada Gmail (2 pendientes):'));
+    assert.ok(briefMessage.includes('[Impresos Rápidos] Confirmación de entrega stand'));
+    assert.ok(briefMessage.includes('[Cliente VIP] Comprobante de transferencia bancaria'));
+
+    // 2b. SchedulerService con bandeja al día (0 correos)
+    const emptyGmailClient = {
+      users: {
+        messages: {
+          list: async () => ({ data: { messages: [] } }),
+        },
+      },
+    };
+    const emptyGmailService = new GmailService({ gmailClient: emptyGmailClient });
+    const schedulerEmptyGmail = new SchedulerService({
+      prisma: mockPrisma,
+      gmailService: emptyGmailService,
+      weatherFetcher: async () => '20°C, Soleado',
+    });
+    const emptyBrief = await schedulerEmptyGmail.triggerMorningBrief(new Date('2026-10-01T07:00:00-06:00'));
+    assert.ok(emptyBrief.includes('• Bandeja al día (sin correos pendientes).'));
+
+    // 2c. Resiliencia en SchedulerService: fallo de Gmail API no tira el briefing
+    const failingGmailService = {
+      getInboxSummary: async () => {
+        throw new Error('Gmail API 503 Service Unavailable');
+      },
+    };
+    const schedulerFailingGmail = new SchedulerService({
+      prisma: mockPrisma,
+      gmailService: failingGmailService,
+      weatherFetcher: async () => '20°C, Soleado',
+    });
+    const fallbackBrief = await schedulerFailingGmail.triggerMorningBrief(new Date('2026-10-01T07:00:00-06:00'));
+    assert.ok(fallbackBrief.includes('🌅 ¡Buenos días, Sebastián!'));
+    assert.ok(fallbackBrief.includes('20°C, Soleado'));
+    assert.ok(fallbackBrief.includes('¡Que sea un día muy exitoso para Deko Labs!'));
+
+    // 3. CarmencitaBrain On-Demand: Consulta en tiempo real por chat
+    const mockAiGmail = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Enseguida reviso tu bandeja de entrada de Gmail, Sebastián!\n' +
+            '```json\n{"action": "CHECK_GMAIL", "maxResults": 5}\n```',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiGmail,
+      gmailService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const brainResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: '¿Tengo correos nuevos en Gmail?',
+    });
+
+    assert.equal(brainResult.hasGmailEmails, true);
+    assert.equal(brainResult.gmailEmails.length, 2);
+    assert.ok(brainResult.reply.includes('✉️ <b>Bandeja de Gmail (2 correos pendientes):</b>'));
+    assert.ok(brainResult.reply.includes('Impresos Rápidos'));
+    assert.ok(brainResult.reply.includes('Confirmación de entrega stand'));
+
+    // 3b. Consulta On-Demand con bandeja limpia
+    const brainClean = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiGmail,
+      gmailService: emptyGmailService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    const cleanResult = await brainClean.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Revisa mi correo',
+    });
+    assert.equal(cleanResult.hasGmailEmails, false);
+    assert.ok(cleanResult.reply.includes('¡Bandeja limpia! No tienes correos pendientes sin leer.'));
+
+    // 4. Resiliencia On-Demand: error capturado limpiamente
+    const failingBrain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiGmail,
+      gmailService: {
+        getUnreadInboxMessages: async () => {
+          throw new Error('Invalid OAuth Credentials');
+        },
+      },
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    const errorResult = await failingBrain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Revisa Gmail',
+    });
+    assert.ok(errorResult.reply.includes('⚠️ No pude consultar tu bandeja de Gmail: Invalid OAuth Credentials'));
   });
 
   // Limpieza final

@@ -158,6 +158,12 @@ export const SaveObsidianNoteActionSchema = z.object({
   summary: z.string().optional(),
 });
 
+export const CheckGmailActionSchema = z.object({
+  action: z.literal('CHECK_GMAIL'),
+  query: z.string().optional().default('is:unread label:INBOX'),
+  maxResults: z.number().optional().default(5),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -169,6 +175,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   SearchContactActionSchema,
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
+  CheckGmailActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

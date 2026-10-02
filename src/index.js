@@ -13,6 +13,7 @@ import { contactService } from './services/contact.service.js';
 import { defaultGoogleTasksService } from './services/google-tasks.service.js';
 import { embeddingService } from './services/embedding.service.js';
 import { schedulerService } from './services/scheduler.service.js';
+import { defaultGmailService } from './services/gmail.service.js';
 import { AgyBridge } from './core/agy-bridge.js';
 import { CarmencitaBrain } from './core/brain.js';
 import { TelegramAdapter } from './adapters/telegram.js';
@@ -61,6 +62,7 @@ async function main() {
       contactService,
       googleTasksService: defaultGoogleTasksService,
       embeddingService,
+      gmailService: defaultGmailService,
     },
     agyBridge
   );
@@ -106,6 +108,7 @@ async function main() {
   schedulerService.prisma = prisma;
   schedulerService.calendarService = defaultCalendarService;
   schedulerService.taskService = taskService;
+  schedulerService.gmailService = defaultGmailService;
   schedulerService.start();
 
   // 9. Apagado Limpio y Transaccional (Graceful Shutdown)
