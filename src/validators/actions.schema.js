@@ -148,6 +148,16 @@ export const SaveMemoryActionSchema = z.object({
   reason: z.string().optional(),
 });
 
+export const SaveObsidianNoteActionSchema = z.object({
+  action: z.literal('SAVE_OBSIDIAN_NOTE'),
+  title: z.string().min(1, 'El título de la nota es obligatorio'),
+  content: z.string().min(1, 'El contenido de la nota es obligatorio'),
+  folder: z.enum(['Inbox', 'Ideas', 'Proyectos', 'Reuniones', 'Proveedores', 'General']).default('Inbox'),
+  tags: z.array(z.string()).default([]),
+  wikilinks: z.array(z.string()).default([]),
+  summary: z.string().optional(),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -158,6 +168,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   SaveContactActionSchema,
   SearchContactActionSchema,
   SaveMemoryActionSchema,
+  SaveObsidianNoteActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

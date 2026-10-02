@@ -9,6 +9,7 @@ import { defaultCalendarService } from '../services/calendar.service.js';
 import { contactService as defaultContactService } from '../services/contact.service.js';
 import { defaultGoogleTasksService } from '../services/google-tasks.service.js';
 import { defaultEmbeddingService } from '../services/embedding.service.js';
+import { defaultObsidianDriveService } from '../services/obsidian-drive.service.js';
 import { parseCarmencitaAction } from '../validators/actions.schema.js';
 
 function makeActionResult(opts) {
@@ -23,6 +24,8 @@ function makeActionResult(opts) {
     contacts: opts.contacts || null,
     excelFile: opts.excelFile || null,
     hasMemory: opts.hasMemory || false,
+    hasObsidianNote: opts.hasObsidianNote || false,
+    obsidianNote: opts.obsidianNote || null,
     fullHistoryText: opts.fullHistoryText || opts.reply,
     actionData: opts.actionData || null,
     initialAck: opts.initialAck || null,
@@ -45,6 +48,7 @@ export class CarmencitaBrain {
     this.contactService = deps?.contactService || defaultContactService;
     this.googleTasksService = deps?.googleTasksService || defaultGoogleTasksService;
     this.embeddingService = deps?.embeddingService !== undefined ? deps.embeddingService : defaultEmbeddingService;
+    this.obsidianService = deps?.obsidianService !== undefined ? deps.obsidianService : defaultObsidianDriveService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
     this.modelPool = deps?.modelPool || (config.ai.modelPool?.length ? config.ai.modelPool : [config.ai.modelName]);
 
@@ -99,12 +103,26 @@ MEMORIA PERMANENTE Y APRENDIZAJE CONTINUO:
 - Si Sebastián te da una directiva duradera ("siempre usa X", "recuerda que el cliente Y prefiere Z", "mi horario es W"), además de responderle con calidez humana, emite la acción estructurada:
   {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 
+BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
+- Estás conectada directamente al Obsidian Vault de Sebastián en Google Drive.
+- Cuando Sebastián te pida guardar una nota, registrar una idea creativa, acta de reunión, apunte de diseño, ficha de proveedor o concepto duradero para Obsidian (o cuando detectes que una propuesta conceptual debe guardarse en su segundo cerebro), emite la acción estructurada:
+  {
+    "action": "SAVE_OBSIDIAN_NOTE",
+    "title": "Título conciso y descriptivo",
+    "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General",
+    "tags": ["deko-labs", "diseño", "stands"],
+    "wikilinks": ["Deko Labs", "Sebastián Jiménez", "Feria del Mueble"],
+    "content": "Cuerpo completo de la nota estructurado en Markdown con subtítulos y callouts ejecutivos"
+  }
+- Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
+
 ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
 - Hoja de cálculo Excel: {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
+- Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
@@ -564,6 +582,38 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
         hasMemory: true,
         fullHistoryText: `${cleanText}\n[Memoria guardada en bóveda semántica: "${parsedAction.content}"]`,
       });
+    }
+
+    if (parsedAction.action === 'SAVE_OBSIDIAN_NOTE') {
+      if (this.obsidianService) {
+        try {
+          const noteResult = await this.obsidianService.createNote({
+            title: parsedAction.title,
+            content: parsedAction.content,
+            folder: parsedAction.folder || 'Inbox',
+            tags: parsedAction.tags || [],
+            wikilinks: parsedAction.wikilinks || [],
+          });
+          return makeActionResult({
+            reply: `${cleanText}\n\n📓 *Nota guardada en tu Obsidian Vault:*\n📂 Carpeta: \`/${noteResult.folder}/${noteResult.fileName}\`\n🕸️ Nodos vinculados al Grafo: ${parsedAction.wikilinks?.map(w => `\`[[${w}]]\``).join(', ') || 'General'}\nSe sincronizará automáticamente con tu aplicación en Windows.`,
+            hasObsidianNote: true,
+            obsidianNote: noteResult,
+            actionData: parsedAction,
+            fullHistoryText: `${cleanText}\n[Nota guardada en Obsidian: /${noteResult.folder}/${noteResult.fileName}]`,
+          });
+        } catch (err) {
+          console.error('[Brain Obsidian] Error creando nota en Drive:', err);
+          return makeActionResult({
+            reply: `${cleanText}\n\n⚠️ No pude sincronizar la nota en Google Drive para Obsidian: ${err.message}`,
+            actionData: parsedAction,
+          });
+        }
+      } else {
+        return makeActionResult({
+          reply: `${cleanText}\n\n⚠️ Servicio de Obsidian en Google Drive no configurado.`,
+          actionData: parsedAction,
+        });
+      }
     }
 
 

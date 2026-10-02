@@ -23,7 +23,8 @@ import { CalendarService } from '../src/services/calendar.service.js';
 import { ContactService } from '../src/services/contact.service.js';
 import { GoogleTasksService } from '../src/services/google-tasks.service.js';
 import { EmbeddingService } from '../src/services/embedding.service.js';
-import { SaveMemoryActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
+import { ObsidianDriveService } from '../src/services/obsidian-drive.service.js';
+import { SaveMemoryActionSchema, SaveObsidianNoteActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
 
 // Setup de configuración y credenciales para pruebas de seguridad
@@ -1959,6 +1960,179 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     });
     assert.deepEqual(attempts400, ['gemini-3.8-flash'], 'Error 400 no debe conmutar a los siguientes modelos');
     assert.ok(typeof result400 === 'string' && result400.includes('error al consultar el motor de IA'));
+  });
+
+  await t.test('29. Integración Bidireccional con Obsidian Vault vía Google Drive API (ObsidianDriveService y SAVE_OBSIDIAN_NOTE)', async () => {
+    // 0. Validación de Esquema Zod SaveObsidianNoteActionSchema
+    const validActionJson = {
+      action: 'SAVE_OBSIDIAN_NOTE',
+      title: 'Stand Vintage 2026',
+      content: '> [!tip] Concepto\nDiseño con vigas rústicas y lámparas Edison.',
+      folder: 'Ideas',
+      tags: ['deko-labs', 'stands', 'diseño'],
+      wikilinks: ['Deko Labs', 'Sebastián Jiménez', 'Ferias 2026'],
+    };
+    const parsed = parseCarmencitaAction(validActionJson);
+    assert.ok(parsed, 'La acción SAVE_OBSIDIAN_NOTE debe ser validada exitosamente por Zod');
+    assert.equal(parsed.action, 'SAVE_OBSIDIAN_NOTE');
+    assert.equal(parsed.title, 'Stand Vintage 2026');
+    assert.equal(parsed.folder, 'Ideas');
+
+    // Validación rechaza título vacío
+    assert.equal(parseCarmencitaAction({ action: 'SAVE_OBSIDIAN_NOTE', title: '', content: 'algo' }), null);
+
+    // 1. ObsidianDriveService: Prueba con Mock de Google Drive Client
+    const createdFolders = [];
+    const createdFiles = [];
+
+    const mockDrive = {
+      files: {
+        list: async ({ q }) => {
+          return { data: { files: [] } };
+        },
+        create: async ({ requestBody, media }) => {
+          if (requestBody.mimeType === 'application/vnd.google-apps.folder') {
+            const folderId = `folder_${requestBody.name}_123`;
+            createdFolders.push({ id: folderId, ...requestBody });
+            return { data: { id: folderId, name: requestBody.name } };
+          }
+          const fileId = 'file_md_123';
+          createdFiles.push({ id: fileId, requestBody, media });
+          return {
+            data: {
+              id: fileId,
+              name: requestBody.name,
+              webViewLink: `https://drive.google.com/file/d/${fileId}/view`,
+              parents: requestBody.parents,
+            },
+          };
+        },
+      },
+    };
+
+    const obsidianService = new ObsidianDriveService({
+      vaultFolderName: 'voult',
+      driveClient: mockDrive,
+    });
+
+    const noteResult = await obsidianService.createNote({
+      title: 'Stand Vintage 2026',
+      content: 'Estructura modular con vigas rústicas y lámparas Edison.',
+      folder: 'Ideas',
+      tags: ['deko-labs', 'stands', '#diseño'],
+      wikilinks: ['Deko Labs', '[[Sebastián Jiménez]]', 'Ferias 2026'],
+    });
+
+    // Validar creación de carpeta raíz y subcarpeta
+    assert.equal(createdFolders.length, 2, 'Debió crear carpeta raíz voult y subcarpeta Ideas');
+    assert.equal(createdFolders[0].name, 'voult');
+    assert.deepEqual(createdFolders[0].parents, ['root']);
+    assert.equal(createdFolders[1].name, 'Ideas');
+    assert.deepEqual(createdFolders[1].parents, [createdFolders[0].id]);
+
+    // Validar archivo markdown creado
+    assert.equal(createdFiles.length, 1);
+    assert.equal(createdFiles[0].requestBody.name, 'Stand Vintage 2026.md');
+    assert.equal(createdFiles[0].requestBody.mimeType, 'text/markdown');
+    assert.deepEqual(createdFiles[0].requestBody.parents, [createdFolders[1].id]);
+
+    // Validar Frontmatter YAML y Wikilinks
+    assert.ok(noteResult.rawContent.includes('---'));
+    assert.ok(noteResult.rawContent.includes('title: "Stand Vintage 2026"'));
+    assert.ok(noteResult.rawContent.includes('author: Carmencita'));
+    assert.ok(noteResult.rawContent.includes('folder: "Ideas"'));
+    assert.ok(noteResult.rawContent.includes('tags:'));
+    assert.ok(noteResult.rawContent.includes('- deko-labs'));
+    assert.ok(noteResult.rawContent.includes('- stands'));
+    assert.ok(noteResult.rawContent.includes('- diseño'));
+    assert.ok(noteResult.rawContent.includes('### 🔗 Enlaces Relacionados (Graph View)'));
+    assert.ok(noteResult.rawContent.includes('- [[Deko Labs]]'));
+    assert.ok(noteResult.rawContent.includes('- [[Sebastián Jiménez]]'));
+    assert.ok(noteResult.rawContent.includes('- [[Ferias 2026]]'));
+
+    // 2. Integración en CarmencitaBrain con acción SAVE_OBSIDIAN_NOTE
+    let capturedNoteParams = null;
+    const mockBrainObsidianService = {
+      createNote: async (params) => {
+        capturedNoteParams = params;
+        return {
+          fileId: 'mock_drive_file_123',
+          fileName: 'Stand Feria 2026.md',
+          folder: params.folder || 'Ideas',
+          webViewLink: 'https://drive.google.com/file/d/mock_drive_file_123/view',
+        };
+      },
+    };
+
+    const mockAiObsidian = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Excelente idea para el stand, Sebastián! La he estructurado para tu Obsidian Vault.\n' +
+            '```json\n' +
+            JSON.stringify({
+              action: 'SAVE_OBSIDIAN_NOTE',
+              title: 'Stand Feria 2026',
+              folder: 'Ideas',
+              tags: ['deko-labs', 'stands'],
+              wikilinks: ['Deko Labs', 'Sebastián Jiménez', 'Feria 2026'],
+              content: '> [!tip] Concepto Principal\nEstructura en madera recuperada con acabados industriales.',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidian,
+      obsidianService: mockBrainObsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const brainResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, anota esta idea para el stand de la feria en Obsidian con tags deko-labs y stands',
+    });
+
+    assert.equal(brainResult.hasObsidianNote, true);
+    assert.ok(brainResult.obsidianNote);
+    assert.equal(brainResult.obsidianNote.fileName, 'Stand Feria 2026.md');
+    assert.equal(capturedNoteParams.title, 'Stand Feria 2026');
+    assert.equal(capturedNoteParams.folder, 'Ideas');
+    assert.deepEqual(capturedNoteParams.tags, ['deko-labs', 'stands']);
+    assert.deepEqual(capturedNoteParams.wikilinks, ['Deko Labs', 'Sebastián Jiménez', 'Feria 2026']);
+    assert.ok(brainResult.reply.includes('Nota guardada en tu Obsidian Vault:'));
+    assert.ok(brainResult.reply.includes('/Ideas/Stand Feria 2026.md'));
+    assert.ok(brainResult.reply.includes('[[Deko Labs]]'));
+    assert.ok(brainResult.reply.includes('[[Sebastián Jiménez]]'));
+
+    // 3. Resiliencia ante fallos de Google Drive
+    const failingObsidianService = {
+      createNote: async () => {
+        throw new Error('Google Drive API 500 Backend Error');
+      },
+    };
+    const failingBrain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidian,
+      obsidianService: failingObsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    const errorResult = await failingBrain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Anota esto en Obsidian',
+    });
+    assert.ok(errorResult.reply.includes('No pude sincronizar la nota en Google Drive para Obsidian: Google Drive API 500 Backend Error'));
   });
 
   // Limpieza final

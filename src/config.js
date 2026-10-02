@@ -53,4 +53,10 @@ export const config = {
     refreshToken: process.env.GOOGLE_REFRESH_TOKEN || '',
     bucketName: process.env.GCS_BUCKET_NAME || 'carmencita-vault-deko',
   },
+
+  // Obsidian & Google Drive Vault
+  obsidian: {
+    vaultFolderName: process.env.OBSIDIAN_VAULT_FOLDER_NAME || 'voult',
+    vaultFolderId: process.env.OBSIDIAN_VAULT_FOLDER_ID || '',
+  },
 };
