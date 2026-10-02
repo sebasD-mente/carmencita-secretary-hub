@@ -24,13 +24,14 @@ import { ContactService } from '../src/services/contact.service.js';
 import { GoogleTasksService } from '../src/services/google-tasks.service.js';
 import { EmbeddingService } from '../src/services/embedding.service.js';
 import { ObsidianDriveService } from '../src/services/obsidian-drive.service.js';
-import { GmailService } from '../src/services/gmail.service.js';
+import { GmailService, isPromotionalOrNoise, DEFAULT_GMAIL_QUERY } from '../src/services/gmail.service.js';
 import { SaveMemoryActionSchema, SaveObsidianNoteActionSchema, CheckGmailActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
 
 // Setup de configuración y credenciales para pruebas de seguridad
 config.apiKey = 'test-secret-key-2026';
 config.whatsapp.allowedNumbers = ['50212345678'];
+config.obsidian.vaultFolderId = ''; // <--- AISLAMIENTO DE PRODUCCIÓN
 const authHeaders = { authorization: 'Bearer test-secret-key-2026' };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2138,19 +2139,63 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
 
   await t.test('30. Integración de Gmail en Briefing Matutino y Consulta On-Demand en CarmencitaBrain (GmailService y CHECK_GMAIL)', async () => {
     // 0. Validación de Esquema Zod CheckGmailActionSchema
-    const validCheckAction = { action: 'CHECK_GMAIL', maxResults: 5, query: 'is:unread label:INBOX' };
-    const parsedAction = parseCarmencitaAction(validCheckAction);
-    assert.ok(parsedAction, 'CHECK_GMAIL debe ser validado por Zod');
-    assert.equal(parsedAction.action, 'CHECK_GMAIL');
-    assert.equal(parsedAction.maxResults, 5);
+    const defaultCheckAction = { action: 'CHECK_GMAIL' };
+    const parsedDefaultAction = parseCarmencitaAction(defaultCheckAction);
+    assert.ok(parsedDefaultAction, 'CHECK_GMAIL por defecto debe ser validado por Zod');
+    assert.equal(parsedDefaultAction.action, 'CHECK_GMAIL');
+    assert.equal(parsedDefaultAction.maxResults, 5);
+    assert.equal(parsedDefaultAction.onlyImportant, true);
+    assert.equal(parsedDefaultAction.query, DEFAULT_GMAIL_QUERY);
 
-    // 1. GmailService Unit: Mock del cliente gmail de googleapis
+    // 0b. Heurística Anti-Ruido y Publicidad: isPromotionalOrNoise
+    assert.equal(isPromotionalOrNoise({ from: 'notifications@linkedin.com', subject: 'Tienes 5 nuevas invitaciones' }), true);
+    assert.equal(isPromotionalOrNoise({ from: 'update@facebookmail.com', subject: 'Novedades de tus amigos' }), true);
+    assert.equal(isPromotionalOrNoise({ from: 'promos@samsung.com', subject: '¡Hasta 65% OFF en Smart TVs!' }), true);
+    assert.equal(isPromotionalOrNoise({ from: 'marketing@tienda.com', subject: 'Descuento exclusivo hoy' }), true);
+    assert.equal(isPromotionalOrNoise({ from: 'deals@club.com', subject: 'Reclama tus puntos' }), true);
+    assert.equal(isPromotionalOrNoise({ from: 'news@realpython.com', subject: 'Weekly digest' }), true);
+    assert.equal(isPromotionalOrNoise({ from: 'promo@newsletter.org', subject: 'Cursos de la semana', hasUnsubscribe: true }), true);
+
+    // Admite correos legítimos de clientes, proveedores y bancos
+    assert.equal(isPromotionalOrNoise({ from: 'facturacion@proveedor.gt', subject: 'Factura Electrónica FE-4920 Deko Labs' }), false);
+    assert.equal(isPromotionalOrNoise({ from: 'banco@notificaciones.banrural.com.gt', subject: 'Confirmación de transferencia bancaria' }), false);
+    assert.equal(isPromotionalOrNoise({ from: 'cliente@constructora.com', subject: 'Aprobación del diseño del stand' }), false);
+    assert.equal(isPromotionalOrNoise({ from: 'sebas@dekolabs.org', subject: 'Reunión de coordinación' }), false);
+
+    // 1. GmailService Unit: Mock del cliente gmail con mezcla de correos principales y promocionales
     const mockMessagesData = [
+      { id: 'msg_promo_01', threadId: 'thread_promo_01' },
       { id: 'msg_001', threadId: 'thread_001' },
+      { id: 'msg_social_01', threadId: 'thread_social_01' },
       { id: 'msg_002', threadId: 'thread_002' },
     ];
 
     const mockMessageDetails = {
+      msg_promo_01: {
+        id: 'msg_promo_01',
+        threadId: 'thread_promo_01',
+        snippet: 'Aprovecha nuestra promoción de temporada con descuentos...',
+        payload: {
+          headers: [
+            { name: 'From', value: 'Samsung Promociones <promos@samsung.com>' },
+            { name: 'Subject', value: '¡Hasta 65% OFF en pantallas y electrodomésticos!' },
+            { name: 'Date', value: 'Thu, 01 Oct 2026 10:00:00 -0600' },
+            { name: 'List-Unsubscribe', value: '<https://samsung.com/unsubscribe>' },
+          ],
+        },
+      },
+      msg_social_01: {
+        id: 'msg_social_01',
+        threadId: 'thread_social_01',
+        snippet: 'Tienes 12 nuevas notificaciones y mensajes en tu red profesional...',
+        payload: {
+          headers: [
+            { name: 'From', value: 'LinkedIn Updates <messages-noreply@linkedin.com>' },
+            { name: 'Subject', value: 'Sebastián, personas que quizás conozcas' },
+            { name: 'Date', value: 'Thu, 01 Oct 2026 11:30:00 -0600' },
+          ],
+        },
+      },
       msg_001: {
         id: 'msg_001',
         threadId: 'thread_001',
@@ -2193,12 +2238,19 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     const gmailService = new GmailService({ gmailClient: mockGmailClient });
     assert.equal(gmailService.isConfigured(), true);
 
-    const unread = await gmailService.getUnreadInboxMessages({ maxResults: 5 });
+    // Filtrado inteligente: sólo deben quedar los 2 correos principales
+    const unread = await gmailService.getUnreadInboxMessages({ maxResults: 5, onlyImportant: true });
     assert.equal(unread.length, 2);
     assert.equal(unread[0].id, 'msg_001');
     assert.equal(unread[0].from, 'Impresos Rápidos <contacto@impresosrapidos.gt>');
     assert.equal(unread[0].subject, 'Confirmación de entrega stand');
     assert.ok(unread[0].snippet.includes('confirmamos la entrega'));
+    assert.equal(unread[1].id, 'msg_002');
+    assert.equal(unread[1].from, 'Cliente VIP <vip@dekolabs.org>');
+
+    // Verificación con onlyImportant: false (retorna todos)
+    const unreadAll = await gmailService.getUnreadInboxMessages({ maxResults: 5, onlyImportant: false });
+    assert.equal(unreadAll.length, 4);
 
     const summary = await gmailService.getInboxSummary({ maxResults: 5 });
     assert.equal(summary.totalUnread, 2);

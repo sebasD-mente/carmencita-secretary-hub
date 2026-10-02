@@ -122,7 +122,7 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
 
 GMAIL & CORREO ELECTRÓNICO:
 - Si Sebastián te pide revisar sus correos, qué hay en su bandeja de entrada, o si tiene correos nuevos de clientes o proveedores, emite:
-  {"action": "CHECK_GMAIL", "maxResults": 5}
+  {"action": "CHECK_GMAIL", "maxResults": 5, "onlyImportant": true}
 
 ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
@@ -131,7 +131,7 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 - Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
-- Consultar bandeja de Gmail: {"action": "CHECK_GMAIL", "maxResults": 5}
+- Consultar bandeja de Gmail: {"action": "CHECK_GMAIL", "maxResults": 5, "onlyImportant": true}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
@@ -627,13 +627,15 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
 
     if (parsedAction.action === 'CHECK_GMAIL') {
       const maxResults = parsedAction.maxResults || 5;
+      const onlyImportant = parsedAction.onlyImportant !== false;
       let emails = [];
       let emailError = null;
       if (this.gmailService) {
         try {
           emails = await this.gmailService.getUnreadInboxMessages({
             maxResults,
-            query: parsedAction.query || 'is:unread label:INBOX',
+            query: parsedAction.query,
+            onlyImportant,
           });
         } catch (err) {
           console.error('[Brain] Error consultando Gmail:', err.message);

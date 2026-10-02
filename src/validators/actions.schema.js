@@ -160,8 +160,9 @@ export const SaveObsidianNoteActionSchema = z.object({
 
 export const CheckGmailActionSchema = z.object({
   action: z.literal('CHECK_GMAIL'),
-  query: z.string().optional().default('is:unread label:INBOX'),
+  query: z.string().optional().default('is:unread label:INBOX category:primary -category:social -category:promotions -category:forums'),
   maxResults: z.number().optional().default(5),
+  onlyImportant: z.boolean().optional().default(true),
 });
 
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
