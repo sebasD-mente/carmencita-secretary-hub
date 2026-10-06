@@ -47,6 +47,7 @@ export class VoiceService {
       try {
         const ffmpeg = spawn('ffmpeg', [
           '-i', 'pipe:0',
+          '-af', 'apad=pad_dur=0.6',
           '-c:a', 'libopus',
           '-b:a', '48k',
           '-vbr', 'on',

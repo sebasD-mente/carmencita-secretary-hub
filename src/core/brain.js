@@ -214,7 +214,7 @@ TONO: Zalamero con clase ("la consentidora ejecutiva de Sebastián"), leal, afec
         recentMessages = await this.prisma.messageLog.findMany({
           where,
           orderBy: { createdAt: 'desc' },
-          take: 6,
+          take: 12,
         });
         recentMessages.reverse();
       }
@@ -496,27 +496,20 @@ Responde únicamente con un objeto JSON:
       }).format(new Date());
       const ahoraIso = new Date().toISOString();
 
-      let relevantMemories = [];
-      if (this.embeddingService && text) {
-        try {
-          relevantMemories = await this.embeddingService.searchSimilarMemories(text, { limit: 3 });
-        } catch (err) {
-          console.warn('[Brain RAG] Error recuperando recuerdos:', err.message);
-        }
-      }
+      const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
 
-      const memoriesBlock = relevantMemories.length > 0
-        ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):
-${relevantMemories.map(m => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
+      const historyBlock = recentMessages.length > 0
+        ? `\n📜 HISTORIAL DE CONVERSACIÓN RECIENTE (MEMORIA DE CONTEXTO):\n${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}\n`
         : '';
 
       const audioPrompt = `
 CONTEXTO TEMPORAL DEL SISTEMA:
 • Fecha y hora actual en Guatemala: ${ahoraGuatemala} (America/Guatemala / UTC-6)
 • Timestamp ISO 8601: ${ahoraIso}
-• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})${memoriesBlock}
+• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
+• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${historyBlock}
 
-Escucha atentamente este audio de Sebastián. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones (sin viñetas, sin encabezados ni títulos de plantilla), como su secretaria ejecutiva Carmencita. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
+Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE para entender referencias como "lo que te pedí antes", "el reporte", "la nota" o temas que ya venían conversando. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones (sin viñetas, sin encabezados ni títulos de plantilla), como su secretaria ejecutiva Carmencita. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
 
       const response = await this._generateContentWithFailover({
         contents: [
@@ -529,7 +522,6 @@ Escucha atentamente este audio de Sebastián. Responde con un mensaje hablado, c
       const replyText = response.text || 'He escuchado tu nota de voz, Sebastián.';
       const actionResult = await this._executeExtractedActions(replyText, onProgress);
 
-      // Síntesis automática de voz en Modo Espejo (si el usuario mandó audio, Carmencita responde con audio)
       if (!actionResult.hasVoice && this.voiceService) {
         try {
           const voiceFile = await this.voiceService.synthesizeSpeech(actionResult.reply);
@@ -682,7 +674,7 @@ Escucha atentamente este audio de Sebastián. Responde con un mensaje hablado, c
     if (parsedAction.action === 'SEARCH_OBSIDIAN_NOTES') {
       if (!this.obsidianService) {
         return makeActionResult({
-          reply: `${cleanText ? cleanText + '\n\n' : ''}⚠️ Servicio de Obsidian en Google Drive no configurado.`,
+          reply: '⚠️ Sebastián querido, el servicio de Obsidian en Google Drive aún no está configurado en mis variables de entorno.',
           actionData: parsedAction,
         });
       }
@@ -702,17 +694,12 @@ Escucha atentamente este audio de Sebastián. Responde con un mensaje hablado, c
 
       let reply = '';
       if (searchErr) {
-        reply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude consultar las notas en tu Obsidian Vault: ${searchErr}`;
+        reply = `Mira Sebastián querido, no pude consultar tus notas de Obsidian en este momento debido a un detalle de conexión con Google Drive: ${searchErr}.`;
       } else if (notes.length === 0) {
-        reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 No encontré notas en tu Obsidian Vault${parsedAction.query ? ` que coincidan con "<b>${parsedAction.query}</b>"` : ''}, Sebastián.`;
+        reply = `Sebastián querido, ya revisé directamente en tu Obsidian Vault y no encontré notas${parsedAction.query ? ` con el término "${parsedAction.query}"` : ''}. Si deseas, indícame en qué carpeta buscar o te la creo de inmediato.`;
       } else {
-        const list = notes.map((f, i) => {
-          const cleanName = f.name ? f.name.replace(/\.md$/i, '') : 'Nota';
-          const link = f.webViewLink ? ` - <a href="${f.webViewLink}">Abrir en Drive</a>` : '';
-          const date = f.modifiedTime ? ` <i>(${new Date(f.modifiedTime).toLocaleDateString('es-GT')})</i>` : '';
-          return `${i + 1}. 📄 <b>${cleanName}</b>${date}${link}`;
-        }).join('\n');
-        reply = `${cleanText ? cleanText + '\n\n' : ''}📓 <b>Notas encontradas en tu Obsidian Vault (${notes.length}):</b>\n\n${list}`;
+        const titulos = notes.slice(0, 3).map((f) => f.name.replace(/\.md$/i, '')).join(', ');
+        reply = `Sebastián querido, ya te encontré ${notes.length} nota(s) en tu Obsidian: ${titulos}. ¿Deseas que te lea alguna de ellas o te prepare un resumen ejecutivo?`;
       }
 
       return makeActionResult({
@@ -720,7 +707,7 @@ Escucha atentamente este audio de Sebastián. Responde con un mensaje hablado, c
         actionData: parsedAction,
         hasObsidianNotes: notes.length > 0,
         obsidianNotes: notes,
-        fullHistoryText: `${cleanText}\n[Búsqueda en Obsidian Vault: "${parsedAction.query || ''}" -> ${notes.length} notas encontradas]`,
+        fullHistoryText: `${reply}\n[Búsqueda en Obsidian Vault: "${parsedAction.query || ''}" -> ${notes.length} notas encontradas]`,
       });
     }
 

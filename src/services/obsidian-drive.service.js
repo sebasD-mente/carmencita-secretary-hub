@@ -156,21 +156,23 @@ ${content}${linksBlock}
     const drive = await this._getDriveClient();
     if (!drive) throw new Error('Google Drive no configurado para Obsidian');
 
-    const vaultId = await this.getOrCreateVaultFolder();
-    let q = `'${vaultId}' in parents and mimeType = 'text/markdown' and trashed = false`;
+    let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
+
     if (folder) {
       const folderId = await this.getOrCreateSubfolder(folder);
-      q = `'${folderId}' in parents and mimeType = 'text/markdown' and trashed = false`;
+      q += ` and '${folderId}' in parents`;
     }
 
-    if (query) {
-      const sanitized = query.replace(/'/g, "\\'");
+    if (query && query.trim()) {
+      const sanitized = query.trim().replace(/'/g, "\\'");
       q += ` and name contains '${sanitized}'`;
+    } else {
+      q += " and (name contains '.md' or mimeType = 'text/markdown' or mimeType = 'text/plain')";
     }
 
     const res = await drive.files.list({
       q,
-      fields: 'files(id, name, webViewLink, modifiedTime)',
+      fields: 'files(id, name, webViewLink, modifiedTime, parents)',
       pageSize: maxResults,
     });
 

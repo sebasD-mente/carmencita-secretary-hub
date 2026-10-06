@@ -2618,6 +2618,12 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(truncatedQuestion.endsWith('?'), 'Debe truncar en el signo de interrogación sin cortar palabras');
     assert.ok(!truncatedQuestion.includes('¿Tie'));
     assert.equal(truncatedQuestion, 'Sebastián querido, ¿tienes alguna duda sobre el inventario y los presupuestos de diseño para los eventos de Deko Labs?');
+
+    // 5. Silencio de cola en FFmpeg (-af apad=pad_dur=0.6) y fallback seguro
+    const voiceSource = await fs.readFile(new URL('../src/services/voice.service.js', import.meta.url), 'utf-8');
+    assert.ok(voiceSource.includes("'-af', 'apad=pad_dur=0.6'"), 'VoiceService debe incluir apad=pad_dur=0.6 para evitar cortes de audio en Telegram');
+    const transcodeRes = await voiceService._transcodeWavToOgg(Buffer.from('RIFF_FAKE_AUDIO'));
+    assert.ok(transcodeRes && transcodeRes.buffer);
   });
 
   await t.test('34. Despacho Multimodal en Modo Espejo: CarmencitaBrain.processAudio con Respuesta de Voz Nativa y Texto Estructurado', async () => {
@@ -2631,17 +2637,34 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       },
     };
 
+    let capturedAudioPrompt = null;
+    let capturedInlineData = null;
     const mockAiAudioMirror = {
       models: {
-        generateContent: async () => ({
-          text: 'Sebastián querido, escuché con atención tu nota de voz sobre la feria.\n\n' +
-            '📌 Resumen: Propuesta para stand modular.\n' +
-            '• Estructura en madera recuperada\n' +
-            '• Iluminación tenue y cálida\n\n' +
-            '¿Deseas que prepare la cotización con los proveedores?',
-        }),
+        generateContent: async ({ contents }) => {
+          capturedAudioPrompt = contents[0];
+          capturedInlineData = contents[1]?.inlineData;
+          return {
+            text: 'Sebastián querido, escuché con atención tu nota de voz sobre la feria.\n\n' +
+              '📌 Resumen: Propuesta para stand modular.\n' +
+              '• Estructura en madera recuperada\n' +
+              '• Iluminación tenue y cálida\n\n' +
+              '¿Deseas que prepare la cotización con los proveedores?',
+          };
+        },
       },
     };
+
+    // Pre-poblar mensaje previo en mockPrisma.messageLog para verificar memoria de contexto
+    await mockPrisma.messageLog.create({
+      data: {
+        channel: 'telegram',
+        senderId: '12345',
+        senderName: 'Sebastián',
+        role: 'user',
+        content: 'Carmencita, prepárame el reporte de la feria de diseño',
+      },
+    });
 
     const brain = new CarmencitaBrain({
       prisma: mockPrisma,
@@ -2661,6 +2684,14 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       buffer: Buffer.from('FAKE_AUDIO_OGG_BUFFER'),
       mimeType: 'audio/ogg',
     });
+
+    // Verificación de Memoria de Contexto en el prompt de audio:
+    assert.ok(capturedAudioPrompt, 'El prompt enviado a Gemini debe existir');
+    assert.ok(capturedAudioPrompt.includes('HISTORIAL DE CONVERSACIÓN RECIENTE (MEMORIA DE CONTEXTO)'), 'Debe inyectar el bloque de historial de contexto reciente');
+    assert.ok(capturedAudioPrompt.includes('prepárame el reporte de la feria de diseño'), 'Debe incluir los mensajes previos del usuario en el prompt');
+    assert.ok(capturedAudioPrompt.includes('Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE'), 'Debe instruir a la IA sobre referencias a lo pedido antes');
+    assert.equal(capturedInlineData.mimeType, 'audio/ogg');
+    assert.equal(capturedInlineData.data, Buffer.from('FAKE_AUDIO_OGG_BUFFER').toString('base64'));
 
     // Validar Modo Espejo: se genera audio de respuesta y se conserva el texto estructurado
     assert.equal(audioResult.hasVoice, true);
@@ -2758,11 +2789,16 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
 
     const obsidianService = new ObsidianDriveService({ driveClient: mockDrive, vaultFolderId: 'root_vault_id' });
 
-    // Probar searchNotes
+    // Probar searchNotes recursiva/flexible (sin limitarse a hijos directos de la raíz cuando folder es null)
     const notesFound = await obsidianService.searchNotes({ query: 'Feria', folder: null, maxResults: 5 });
     assert.equal(notesFound.length, 2);
     assert.equal(notesFound[0].name, 'Stand Modular Feria 2026.md');
     assert.ok(capturedListQuery.includes("name contains 'Feria'"));
+    assert.ok(!capturedListQuery.includes('in parents'), 'Búsqueda general no debe limitar a hijos directos de un root');
+
+    // Probar searchNotes con carpeta específica
+    const notesInFolder = await obsidianService.searchNotes({ query: 'Feria', folder: 'Proyectos', maxResults: 5 });
+    assert.ok(capturedListQuery.includes("in parents"), 'Búsqueda con carpeta debe filtrar por parents');
 
     // Probar readNote
     const noteContent = await obsidianService.readNote({ fileId: 'file_md_1' });
@@ -2773,7 +2809,7 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     const mockAiObsidianSearch = {
       models: {
         generateContent: async () => ({
-          text: 'Aquí te tengo lo que encontré en tus notas de Obsidian, Sebastián:\n```json\n' +
+          text: 'Entro a revisar tus notas...\n```json\n' +
             JSON.stringify({
               action: 'SEARCH_OBSIDIAN_NOTES',
               query: 'Feria',
@@ -2803,10 +2839,31 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(searchResult.hasObsidianNotes, true);
     assert.ok(searchResult.obsidianNotes);
     assert.equal(searchResult.obsidianNotes.length, 2);
-    assert.ok(searchResult.reply.includes('Notas encontradas en tu Obsidian Vault (2)'));
+    assert.ok(searchResult.reply.includes('ya te encontré 2 nota(s) en tu Obsidian'));
     assert.ok(searchResult.reply.includes('Stand Modular Feria 2026'));
     assert.ok(searchResult.reply.includes('Ideas Materiales Feria'));
-    assert.ok(searchResult.reply.includes('https://drive.google.com/open?id=file_md_1'));
+    assert.ok(!searchResult.reply.includes('Entro a revisar'), 'Cero frases de promesa previa en la respuesta final');
+
+    // 3. Verificación de búsqueda sin resultados (cero notas)
+    const emptyBrain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidianSearch,
+      obsidianService: {
+        searchNotes: async () => [],
+      },
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    const emptyResult = await emptyBrain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Búscame las notas de la feria en Obsidian',
+    });
+    assert.ok(emptyResult.reply.includes('no encontré notas con el término "Feria"'));
+    assert.ok(!emptyResult.reply.includes('Entro a revisar'), 'Cero promesas vacías al no encontrar notas');
   });
 
   await t.test('36. Erradicación de Errores Crudos en RUN_AGY_TASK: Síntesis Humana Natural y Preservación Forense en MessageLog', async () => {
