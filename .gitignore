@@ -10,3 +10,5 @@ data/facturas/*
 !data/facturas/.gitkeep
 data/documentos/*
 !data/documentos/.gitkeep
+data/media/qr/*
+!data/media/qr/.gitkeep

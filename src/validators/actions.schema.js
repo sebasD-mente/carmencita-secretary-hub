@@ -165,6 +165,25 @@ export const CheckGmailActionSchema = z.object({
   onlyImportant: z.boolean().optional().default(true),
 });
 
+export const GenerateQrActionSchema = z.object({
+  action: z.literal('GENERATE_QR'),
+  text: z.string().min(1, 'La URL o texto para el código QR es obligatorio'),
+  title: z.string().optional().default('Código QR Oficial'),
+  caption: z.string().optional(),
+});
+
+export const SendMediaActionSchema = z.object({
+  action: z.literal('SEND_MEDIA'),
+  mediaType: z.enum(['AVATAR', 'PROFILE', 'QR', 'DOCUMENT']).default('PROFILE'),
+  filePath: z.string().optional(),
+  caption: z.string().optional(),
+});
+
+export const SendVoiceActionSchema = z.object({
+  action: z.literal('SEND_VOICE'),
+  message: z.string().min(1, 'El mensaje de voz es obligatorio'),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -177,6 +196,9 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
   CheckGmailActionSchema,
+  GenerateQrActionSchema,
+  SendMediaActionSchema,
+  SendVoiceActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

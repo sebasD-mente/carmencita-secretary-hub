@@ -275,7 +275,26 @@ export class TelegramAdapter {
           },
         });
 
-        if (reply?.hasExcel && reply?.excelFile) {
+        if (reply?.hasPhoto && reply?.photoFile) {
+          const photoInput = reply.photoFile.buffer
+            ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
+            : new InputFile(reply.photoFile.path);
+          await ctx.replyWithPhoto(photoInput, {
+            caption: reply.photoFile.caption || reply.reply,
+          });
+        } else if (reply?.hasVoice && reply?.voiceFile) {
+          await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+          if (reply?.reply) {
+            await this._safeReply(ctx, reply.reply);
+          }
+        } else if (reply?.hasDocument && reply?.documentFile) {
+          const docInput = reply.documentFile.buffer
+            ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
+            : new InputFile(reply.documentFile.path);
+          await ctx.replyWithDocument(docInput, {
+            caption: reply.documentFile.caption || reply.reply,
+          });
+        } else if (reply?.hasExcel && reply?.excelFile) {
           await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
             caption: reply.reply,
           });
@@ -382,12 +401,26 @@ export class TelegramAdapter {
           },
         });
 
-        if (reply?.hasExcel && reply?.excelFile) {
+        // Si generó nota de voz (Modo Espejo), enviarla primero con su onda sonora
+        if (reply?.hasVoice && reply?.voiceFile) {
+          await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+        }
+
+        // Si generó foto (ej: QR solicitado por audio)
+        if (reply?.hasPhoto && reply?.photoFile) {
+          const photoInput = reply.photoFile.buffer
+            ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
+            : new InputFile(reply.photoFile.path);
+          await ctx.replyWithPhoto(photoInput, {
+            caption: reply.photoFile.caption || reply.reply,
+          });
+        } else if (reply?.hasExcel && reply?.excelFile) {
           await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
             caption: reply.reply,
           });
-        } else {
-          await this._safeReply(ctx, reply?.reply || reply);
+        } else if (reply?.reply) {
+          // Despachar también el texto estructurado para lectura rápida
+          await this._safeReply(ctx, reply.reply);
         }
       } finally {
         clearInterval(typingInterval);

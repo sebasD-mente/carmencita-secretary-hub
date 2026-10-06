@@ -5,7 +5,7 @@ export class ObsidianDriveService {
     clientId = config.google?.clientId,
     clientSecret = config.google?.clientSecret,
     refreshToken = config.google?.refreshToken,
-    vaultFolderName = config.obsidian?.vaultFolderName || 'voult',
+    vaultFolderName = config.obsidian?.vaultFolderName || 'vault',
     vaultFolderId = config.obsidian?.vaultFolderId || '',
     driveClient = null,
   } = {}) {

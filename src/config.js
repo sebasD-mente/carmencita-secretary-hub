@@ -56,7 +56,7 @@ export const config = {
 
   // Obsidian & Google Drive Vault
   obsidian: {
-    vaultFolderName: process.env.OBSIDIAN_VAULT_FOLDER_NAME || 'voult',
+    vaultFolderName: process.env.OBSIDIAN_VAULT_FOLDER_NAME || 'vault',
     vaultFolderId: process.env.OBSIDIAN_VAULT_FOLDER_ID || '',
   },
 };

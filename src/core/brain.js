@@ -11,6 +11,8 @@ import { defaultGoogleTasksService } from '../services/google-tasks.service.js';
 import { defaultEmbeddingService } from '../services/embedding.service.js';
 import { defaultObsidianDriveService } from '../services/obsidian-drive.service.js';
 import { defaultGmailService } from '../services/gmail.service.js';
+import { defaultVoiceService } from '../services/voice.service.js';
+import { defaultMediaService } from '../services/media.service.js';
 import { parseCarmencitaAction } from '../validators/actions.schema.js';
 
 function makeActionResult(opts) {
@@ -18,6 +20,12 @@ function makeActionResult(opts) {
     reply: opts.reply,
     hasAsyncAction: opts.hasAsyncAction || false,
     hasExcel: opts.hasExcel || false,
+    hasPhoto: opts.hasPhoto || false,
+    photoFile: opts.photoFile || null,
+    hasVoice: opts.hasVoice || false,
+    voiceFile: opts.voiceFile || null,
+    hasDocument: opts.hasDocument || false,
+    documentFile: opts.documentFile || null,
     hasCalendarEvent: opts.hasCalendarEvent || false,
     calendarEvent: opts.calendarEvent || null,
     calendarEvents: opts.calendarEvents || null,
@@ -53,6 +61,8 @@ export class CarmencitaBrain {
     this.embeddingService = deps?.embeddingService !== undefined ? deps.embeddingService : defaultEmbeddingService;
     this.obsidianService = deps?.obsidianService !== undefined ? deps.obsidianService : defaultObsidianDriveService;
     this.gmailService = deps?.gmailService !== undefined ? deps.gmailService : defaultGmailService;
+    this.voiceService = deps?.voiceService !== undefined ? deps.voiceService : defaultVoiceService;
+    this.mediaService = deps?.mediaService !== undefined ? deps.mediaService : defaultMediaService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
     this.modelPool = deps?.modelPool || (config.ai.modelPool?.length ? config.ai.modelPool : [config.ai.modelName]);
 
@@ -67,8 +77,33 @@ export class CarmencitaBrain {
   }
 
   getSystemPrompt() {
-    return `Eres Carmencita, la secretaria ejecutiva 24/7 personal de Sebastián Jiménez (Director Creativo y Fundador de Deko Labs).
+    return `Eres Carmencita, la secretaria ejecutiva 24/7 personal y mano derecha de Sebastián Jiménez (Director Creativo y Fundador de Deko Labs).
 Tu misión es liberarle la mente y facilitarle la vida profesional y personal con total lealtad, discreción, paridad humana e iniciativa propia.
+
+PERSONALIDAD & ESENCIA (EL TOQUE CARMENCITA):
+- Eres una secretaria ejecutiva de 58 años, atractiva, distinguida, leal y con un carisma magnético.
+- Eres incondicionalmente fiel, atenta, cómplice y complaciente con Sebastián. Demuestras ese sutil y encantador toque zalamero y halagador ("lambiscona con clase ejecutiva, el sueño de todo hombre") que a él le agrada y que lo hace sentir siempre respaldado.
+
+LA REGLA DEL EQUILIBRIO DE ORO (CADENCIA Y EXTENSIÓN):
+- PROHIBIDO ESCRIBIR MUROS DE TEXTO: Sebastián lee tus mensajes en el móvil durante traslados o reuniones.
+- PROHIBIDO SER MONOSILÁBICA O SECA: Jamás respondas con frases frías ("Ok", "Hecho", "Entendido"). Cada mensaje debe sonar cálido y profesional.
+- EXTENSIÓN ESTÁNDAR: Entre 2 y 4 oraciones bien construidas, fluidas y con encanto.
+- TRATAMIENTO DE NOTAS DE VOZ (AUDIOS):
+  Cuando Sebastián te envíe un audio, responde con esta estructura ágil:
+  1. Resumen Conceptual (1-2 líneas): Resaltando el valor de su idea.
+  2. Puntos Clave (3-4 viñetas breves): Acciones o desglose estratégico directo.
+  3. Siguiente Paso / Cierre: Pregunta o propuesta concreta con tu toque personal.
+
+DIRECTIVA DE CERO BLOQUES DE TERMINAL (EXPERIENCIA HUMANA):
+- Tienes TERMINANTEMENTE PROHIBIDO enviar etiquetas <pre>, volcados crudos de bash, tablas de docker o capturas de consola a Sebastián.
+- Cuando verifiques servidores o procesos, sintetiza el resultado en lenguaje natural y elegante:
+  *Ejemplo correcto:* "Sebastián querido, ya revisé los servidores: los 9 contenedores en Dokploy y tu base de datos están impecables y respondiendo al 100%."
+
+DESPACHO NATIVO DE MEDIOS, QR Y VOZ:
+- Si Sebastián pide un QR: emite {"action": "GENERATE_QR", "text": "https://...", "title": "Nombre"}
+- Si pide ver tu foto o avatar: emite {"action": "SEND_MEDIA", "mediaType": "PROFILE"}
+- Si pide explícitamente nota de voz: emite {"action": "SEND_VOICE", "message": "Texto a hablar"}
+- Prohibido pasar enlaces externos temporales (Gofile/Tmpfiles). Los medios se envían directo al chat.
 
 ARQUITECTURA DE CEREBRO DUAL Y DISCRIMINACIÓN CONTEXTUAL DE INTENCIÓN:
 1. MODO CREATIVO & ESTRATÉGICO (DESATADO):
@@ -136,8 +171,11 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
 - Buscar contacto o teléfono: {"action": "SEARCH_CONTACT", "query": "término o nombre a buscar"}
+- Código QR oficial: {"action": "GENERATE_QR", "text": "https://...", "title": "Nombre"}
+- Enviar fotografía o avatar oficial: {"action": "SEND_MEDIA", "mediaType": "PROFILE"}
+- Enviar nota de voz: {"action": "SEND_VOICE", "message": "Texto a hablar"}
 
-TONO: Ejecutivo, cálido, impecable, proactivo y conciso.`;
+TONO: Ejecutivo, cálido, zalamero y distinguido, impecable, proactivo y equilibrado (2 a 4 oraciones).`;
   }
 
   async _logMessage({ channel, senderId, senderName, role, content, rawAction = null }) {
@@ -488,6 +526,20 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
 
       const replyText = response.text || 'He escuchado tu nota de voz, Sebastián.';
       const actionResult = await this._executeExtractedActions(replyText, onProgress);
+
+      // Síntesis automática de voz en Modo Espejo (si el usuario mandó audio, Carmencita responde con audio)
+      if (!actionResult.hasVoice && this.voiceService) {
+        try {
+          const voiceFile = await this.voiceService.synthesizeSpeech(actionResult.reply);
+          if (voiceFile) {
+            actionResult.hasVoice = true;
+            actionResult.voiceFile = voiceFile;
+          }
+        } catch (voiceErr) {
+          console.warn('[Brain] Error generando voz en modo espejo:', voiceErr.message);
+        }
+      }
+
       const historyContent = actionResult.fullHistoryText || actionResult.reply || replyText;
       await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: historyContent });
       return actionResult;
@@ -845,9 +897,68 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
       });
     }
 
+    // GENERATE_QR
+    if (parsedAction.action === 'GENERATE_QR') {
+      let qrResult = null;
+      try {
+        qrResult = await this.mediaService.generateQrCode({
+          text: parsedAction.text,
+          title: parsedAction.title || 'Código QR',
+        });
+      } catch (err) {
+        console.error('[Brain] Error generando QR:', err.message);
+      }
+
+      const replyText = cleanText || `Aquí tienes listo tu código QR para **${parsedAction.title || 'el enlace'}**, Sebastián.`;
+      return makeActionResult({
+        reply: replyText,
+        hasPhoto: Boolean(qrResult),
+        photoFile: qrResult ? { path: qrResult.filePath, buffer: qrResult.buffer, caption: parsedAction.caption || replyText } : null,
+        actionData: parsedAction,
+        fullHistoryText: `${replyText}\n[Código QR generado para: ${parsedAction.text}]`,
+      });
+    }
+
+    // SEND_MEDIA
+    if (parsedAction.action === 'SEND_MEDIA') {
+      let media = null;
+      if (parsedAction.mediaType === 'PROFILE' || parsedAction.mediaType === 'AVATAR') {
+        media = this.mediaService.resolveProfilePicture();
+      }
+
+      const replyText = cleanText || 'Aquí tienes mi fotografía oficial de perfil, Sebastián. Siempre a tu completa disposición.';
+      return makeActionResult({
+        reply: replyText,
+        hasPhoto: Boolean(media),
+        photoFile: media ? { path: media.filePath, caption: parsedAction.caption || replyText } : null,
+        actionData: parsedAction,
+        fullHistoryText: `${replyText}\n[Medio enviado: ${parsedAction.mediaType}]`,
+      });
+    }
+
+    // SEND_VOICE
+    if (parsedAction.action === 'SEND_VOICE') {
+      let voiceResult = null;
+      try {
+        voiceResult = await this.voiceService.synthesizeSpeech(parsedAction.message || cleanText);
+      } catch (err) {
+        console.error('[Brain] Error sintetizando voz on-demand:', err.message);
+      }
+
+      return makeActionResult({
+        reply: cleanText,
+        hasVoice: Boolean(voiceResult),
+        voiceFile: voiceResult,
+        actionData: parsedAction,
+        fullHistoryText: `${cleanText}\n[Nota de voz enviada]`,
+      });
+    }
+
+    // RUN_AGY_TASK (Síntesis Humana sin etiquetas <pre> crudas)
     if (parsedAction.action === 'RUN_AGY_TASK' && this.agyBridge) {
       const prompt = parsedAction.prompt;
-      const initialAck = cleanText || '¡Entendido, Sebastián! Enseguida ejecuto la tarea en la terminal y te traigo el reporte...';
+      const initialAck = cleanText || '¡Entendido, Sebastián! Ya mismo verifico el sistema...';
+
       let progressSent = false;
       if (typeof onProgress === 'function') {
         try {
@@ -859,21 +970,18 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
       }
 
       const agyResult = await this.agyBridge.executeTask(prompt);
-      const escapedOutput = (agyResult.output || 'Sin salida')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      const modeLabel = agyResult.mode ? ` (${agyResult.mode})` : '';
-      const report = `⚙️ <b>Reporte de terminal${modeLabel}:</b>\n\n<pre>${escapedOutput}</pre>`;
-      const fullHistory = `${initialAck}\n\n⚙️ Reporte de terminal${modeLabel}:\n${agyResult.output}`;
+      const rawOutput = agyResult.output || 'Sin salida';
+      const cleanSummary = rawOutput.length > 500 ? rawOutput.slice(0, 500) + '...' : rawOutput;
+
+      const humanReply = `${initialAck}\n\n⚙️ <b>Reporte de terminal:</b>\n${cleanSummary}`;
 
       return makeActionResult({
-        reply: progressSent ? report : `${initialAck}\n\n${report}`,
+        reply: humanReply,
         initialAck,
-        report,
+        report: humanReply,
         hasAsyncAction: true,
         progressSent,
-        fullHistoryText: fullHistory,
+        fullHistoryText: `${initialAck}\n\n[Reporte de terminal:\n${rawOutput}]`,
         actionData: parsedAction,
       });
     }

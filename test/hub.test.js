@@ -25,7 +25,17 @@ import { GoogleTasksService } from '../src/services/google-tasks.service.js';
 import { EmbeddingService } from '../src/services/embedding.service.js';
 import { ObsidianDriveService } from '../src/services/obsidian-drive.service.js';
 import { GmailService, isPromotionalOrNoise, DEFAULT_GMAIL_QUERY } from '../src/services/gmail.service.js';
-import { SaveMemoryActionSchema, SaveObsidianNoteActionSchema, CheckGmailActionSchema, parseCarmencitaAction } from '../src/validators/actions.schema.js';
+import { MediaService } from '../src/services/media.service.js';
+import { VoiceService } from '../src/services/voice.service.js';
+import {
+  SaveMemoryActionSchema,
+  SaveObsidianNoteActionSchema,
+  CheckGmailActionSchema,
+  GenerateQrActionSchema,
+  SendMediaActionSchema,
+  SendVoiceActionSchema,
+  parseCarmencitaAction,
+} from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
 
 // Setup de configuración y credenciales para pruebas de seguridad
@@ -2013,7 +2023,7 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     };
 
     const obsidianService = new ObsidianDriveService({
-      vaultFolderName: 'voult',
+      vaultFolderName: 'vault',
       driveClient: mockDrive,
     });
 
@@ -2026,8 +2036,8 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     });
 
     // Validar creación de carpeta raíz y subcarpeta
-    assert.equal(createdFolders.length, 2, 'Debió crear carpeta raíz voult y subcarpeta Ideas');
-    assert.equal(createdFolders[0].name, 'voult');
+    assert.equal(createdFolders.length, 2, 'Debió crear carpeta raíz vault y subcarpeta Ideas');
+    assert.equal(createdFolders[0].name, 'vault');
     assert.deepEqual(createdFolders[0].parents, ['root']);
     assert.equal(createdFolders[1].name, 'Ideas');
     assert.deepEqual(createdFolders[1].parents, [createdFolders[0].id]);
@@ -2374,6 +2384,308 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       text: 'Revisa Gmail',
     });
     assert.ok(errorResult.reply.includes('⚠️ No pude consultar tu bandeja de Gmail: Invalid OAuth Credentials'));
+  });
+
+  await t.test('31. Despacho Nativo de Medios: MediaService y Acción GENERATE_QR con Código QR en PNG', async () => {
+    // 0. Validación de Esquema Zod GenerateQrActionSchema
+    const validQrAction = {
+      action: 'GENERATE_QR',
+      text: 'https://instagram.com/decovintagegt',
+      title: 'Instagram Deco Vintage',
+    };
+    const parsedAction = parseCarmencitaAction(validQrAction);
+    assert.ok(parsedAction, 'GENERATE_QR debe ser validado por Zod');
+    assert.equal(parsedAction.action, 'GENERATE_QR');
+    assert.equal(parsedAction.text, 'https://instagram.com/decovintagegt');
+    assert.equal(parsedAction.title, 'Instagram Deco Vintage');
+
+    // Valor por defecto para title
+    const defaultTitleAction = parseCarmencitaAction({ action: 'GENERATE_QR', text: 'https://decovintage.online' });
+    assert.equal(defaultTitleAction.title, 'Código QR Oficial');
+
+    // Rechazo de texto vacío
+    assert.equal(parseCarmencitaAction({ action: 'GENERATE_QR', text: '' }), null);
+
+    // 1. Generación de QR en disco y buffer con MediaService
+    const mediaService = new MediaService(testDataDir);
+    const qrResult = await mediaService.generateQrCode({
+      text: 'https://instagram.com/decovintagegt',
+      title: 'Instagram Deco Vintage',
+      fileName: 'test_instagram_qr.png',
+    });
+
+    assert.ok(qrResult);
+    assert.ok(qrResult.filePath);
+    assert.ok(Buffer.isBuffer(qrResult.buffer));
+    assert.ok(qrResult.buffer.length > 0);
+    assert.equal(qrResult.fileName, 'test_instagram_qr.png');
+    assert.equal(qrResult.title, 'Instagram Deco Vintage');
+
+    const fileOnDisk = await fs.readFile(qrResult.filePath);
+    assert.ok(fileOnDisk.length > 0);
+
+    // 2. Integración en CarmencitaBrain con acción GENERATE_QR
+    const mockAiQr = {
+      models: {
+        generateContent: async () => ({
+          text: 'Aquí tienes listo tu código QR para **Instagram Deco Vintage**, Sebastián.\n```json\n' +
+            JSON.stringify({
+              action: 'GENERATE_QR',
+              text: 'https://instagram.com/decovintagegt',
+              title: 'Instagram Deco Vintage',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiQr,
+      mediaService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const brainResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Genera el QR de Instagram Deco Vintage',
+    });
+
+    assert.equal(brainResult.hasPhoto, true);
+    assert.ok(brainResult.photoFile);
+    assert.ok(brainResult.photoFile.path);
+    assert.ok(brainResult.photoFile.buffer);
+    assert.equal(brainResult.actionData.action, 'GENERATE_QR');
+    assert.ok(brainResult.reply.includes('Instagram Deco Vintage'));
+    assert.ok(brainResult.photoFile.caption.includes('Instagram Deco Vintage'));
+  });
+
+  await t.test('32. Despacho Nativo de Medios: MediaService y Acción SEND_MEDIA (Foto de Perfil y Avatar)', async () => {
+    // 0. Validación de Esquema Zod SendMediaActionSchema
+    const validMediaAction = { action: 'SEND_MEDIA', mediaType: 'PROFILE' };
+    const parsedMedia = parseCarmencitaAction(validMediaAction);
+    assert.ok(parsedMedia, 'SEND_MEDIA debe ser validado por Zod');
+    assert.equal(parsedMedia.action, 'SEND_MEDIA');
+    assert.equal(parsedMedia.mediaType, 'PROFILE');
+
+    // Default mediaType es PROFILE
+    const defaultMedia = parseCarmencitaAction({ action: 'SEND_MEDIA' });
+    assert.equal(defaultMedia.mediaType, 'PROFILE');
+
+    // 1. Resolución de foto de perfil con MediaService
+    const mediaService = new MediaService(testDataDir);
+    await fs.mkdir(mediaService.perfilDir, { recursive: true });
+    const profilePath = path.join(mediaService.perfilDir, 'carmencita_profile.jpg');
+    await fs.writeFile(profilePath, Buffer.from('FAKE_CARMENCITA_JPEG_DATA'));
+
+    const resolvedMedia = mediaService.resolveProfilePicture();
+    assert.ok(resolvedMedia);
+    assert.equal(resolvedMedia.filePath, profilePath);
+    assert.equal(resolvedMedia.fileName, 'carmencita_profile.jpg');
+    assert.equal(resolvedMedia.mimeType, 'image/jpeg');
+
+    // 2. Integración en CarmencitaBrain con acción SEND_MEDIA
+    const mockAiProfile = {
+      models: {
+        generateContent: async () => ({
+          text: 'Aquí tienes mi fotografía oficial de perfil, Sebastián. Siempre a tu completa disposición.\n```json\n' +
+            JSON.stringify({
+              action: 'SEND_MEDIA',
+              mediaType: 'PROFILE',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiProfile,
+      mediaService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const brainResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, mándame tu foto de perfil',
+    });
+
+    assert.equal(brainResult.hasPhoto, true);
+    assert.ok(brainResult.photoFile);
+    assert.equal(brainResult.photoFile.path, profilePath);
+    assert.equal(brainResult.actionData.action, 'SEND_MEDIA');
+    assert.ok(brainResult.reply.includes('fotografía oficial'));
+  });
+
+  await t.test('33. Síntesis Neuronal de Voz Natural: VoiceService (Gemini TTS, Aoede, Limpieza y Transcodificación)', async () => {
+    // 0. Validación de Esquema Zod SendVoiceActionSchema
+    const validVoiceAction = { action: 'SEND_VOICE', message: 'Sebastián, tus reportes están listos.' };
+    const parsedVoice = parseCarmencitaAction(validVoiceAction);
+    assert.ok(parsedVoice, 'SEND_VOICE debe ser validado por Zod');
+    assert.equal(parsedVoice.action, 'SEND_VOICE');
+    assert.equal(parsedVoice.message, 'Sebastián, tus reportes están listos.');
+
+    // Rechazo de mensaje vacío
+    assert.equal(parseCarmencitaAction({ action: 'SEND_VOICE', message: '' }), null);
+
+    // 1. Limpieza de dicción con _cleanTextForSpeech
+    const voiceService = new VoiceService({ apiKey: 'fake-key' });
+    const dirtyText = '¡Hola **Sebastián**! Revisa <pre>docker ps</pre> y el enlace [Deco Vintage](https://decovintage.online). • Cero problemas.\n```json\n{"action": "TEST"}\n```';
+    const cleanSpeech = voiceService._cleanTextForSpeech(dirtyText);
+    assert.ok(!cleanSpeech.includes('**'));
+    assert.ok(!cleanSpeech.includes('<pre>'));
+    assert.ok(!cleanSpeech.includes('</pre>'));
+    assert.ok(!cleanSpeech.includes('```'));
+    assert.ok(!cleanSpeech.includes('https://'));
+    assert.ok(cleanSpeech.includes('Sebastián'));
+    assert.ok(cleanSpeech.includes('Deco Vintage'));
+    assert.ok(cleanSpeech.includes('Cero problemas'));
+
+    // 2. Síntesis de voz con Mock de @google/genai
+    let capturedModel = null;
+    let capturedVoice = null;
+    let capturedText = null;
+
+    const mockAiVoice = {
+      models: {
+        generateContent: async ({ model, contents, config: genConfig }) => {
+          capturedModel = model;
+          capturedText = contents;
+          capturedVoice = genConfig?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName;
+          return {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: 'audio/wav',
+                        data: Buffer.from('RIFF_WAV_FAKE_DATA_AUDIO_BYTES').toString('base64'),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    const voiceServiceWithMock = new VoiceService({ ai: mockAiVoice });
+    const voiceResult = await voiceServiceWithMock.synthesizeSpeech('Hola Sebastián querido, todo está listo.');
+
+    assert.equal(capturedModel, 'gemini-3.8-flash-tts');
+    assert.equal(capturedVoice, 'Aoede');
+    assert.equal(capturedText, 'Hola Sebastián querido, todo está listo.');
+    assert.ok(voiceResult);
+    assert.ok(Buffer.isBuffer(voiceResult.buffer));
+    assert.ok(voiceResult.mimeType === 'audio/ogg' || voiceResult.mimeType === 'audio/wav');
+    assert.ok(voiceResult.fileName.includes('carmencita_voice'));
+
+    // 3. Resiliencia ante cliente no inicializado o texto vacío
+    const uninitVoice = new VoiceService({ ai: null, apiKey: '' });
+    assert.equal(await uninitVoice.synthesizeSpeech('Hola'), null);
+    assert.equal(await voiceServiceWithMock.synthesizeSpeech(''), null);
+    assert.equal(await voiceServiceWithMock.synthesizeSpeech('a'), null);
+  });
+
+  await t.test('34. Despacho Multimodal en Modo Espejo: CarmencitaBrain.processAudio con Respuesta de Voz Nativa y Texto Estructurado', async () => {
+    const mockVoiceService = {
+      synthesizeSpeech: async () => {
+        return {
+          buffer: Buffer.from('OGG_OPUS_MOCK_STREAM'),
+          mimeType: 'audio/ogg',
+          fileName: 'carmencita_voice.ogg',
+        };
+      },
+    };
+
+    const mockAiAudioMirror = {
+      models: {
+        generateContent: async () => ({
+          text: 'Sebastián querido, escuché con atención tu nota de voz sobre la feria.\n\n' +
+            '📌 Resumen: Propuesta para stand modular.\n' +
+            '• Estructura en madera recuperada\n' +
+            '• Iluminación tenue y cálida\n\n' +
+            '¿Deseas que prepare la cotización con los proveedores?',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiAudioMirror,
+      voiceService: mockVoiceService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    // 1. Invocación de processAudio con buffer de audio entrante
+    const audioResult = await brain.processAudio({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      buffer: Buffer.from('FAKE_AUDIO_OGG_BUFFER'),
+      mimeType: 'audio/ogg',
+    });
+
+    // Validar Modo Espejo: se genera audio de respuesta y se conserva el texto estructurado
+    assert.equal(audioResult.hasVoice, true);
+    assert.ok(audioResult.voiceFile);
+    assert.equal(audioResult.voiceFile.mimeType, 'audio/ogg');
+    assert.equal(audioResult.voiceFile.fileName, 'carmencita_voice.ogg');
+    assert.ok(audioResult.reply.includes('Sebastián querido'));
+    assert.ok(audioResult.reply.includes('Resumen: Propuesta para stand modular'));
+
+    // 2. Acción SEND_VOICE disparada por texto On-Demand
+    const mockAiVoiceOnDemand = {
+      models: {
+        generateContent: async () => ({
+          text: 'Aquí tienes mi resumen en audio, Sebastián.\n```json\n' +
+            JSON.stringify({
+              action: 'SEND_VOICE',
+              message: 'Sebastián, el estado de los servidores y el inventario es óptimo.',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brainOnDemand = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiVoiceOnDemand,
+      voiceService: mockVoiceService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const textVoiceResult = await brainOnDemand.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Mándame un audio con el resumen',
+    });
+
+    assert.equal(textVoiceResult.hasVoice, true);
+    assert.ok(textVoiceResult.voiceFile);
+    assert.equal(textVoiceResult.voiceFile.mimeType, 'audio/ogg');
+    assert.equal(textVoiceResult.actionData.action, 'SEND_VOICE');
+    assert.ok(textVoiceResult.reply.includes('Aquí tienes mi resumen en audio'));
   });
 
   // Limpieza final
