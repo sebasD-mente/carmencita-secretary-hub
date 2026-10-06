@@ -158,6 +158,13 @@ export const SaveObsidianNoteActionSchema = z.object({
   summary: z.string().optional(),
 });
 
+export const SearchObsidianNotesActionSchema = z.object({
+  action: z.literal('SEARCH_OBSIDIAN_NOTES'),
+  query: z.string().optional().default(''),
+  folder: z.string().optional().nullable(),
+  maxResults: z.number().optional().default(5),
+});
+
 export const CheckGmailActionSchema = z.object({
   action: z.literal('CHECK_GMAIL'),
   query: z.string().optional().default('is:unread label:INBOX category:primary -category:social -category:promotions -category:forums'),
@@ -195,6 +202,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   SearchContactActionSchema,
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
+  SearchObsidianNotesActionSchema,
   CheckGmailActionSchema,
   GenerateQrActionSchema,
   SendMediaActionSchema,

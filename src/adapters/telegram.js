@@ -275,18 +275,35 @@ export class TelegramAdapter {
           },
         });
 
-        if (reply?.hasPhoto && reply?.photoFile) {
+        if (reply?.hasVoice && reply?.voiceFile) {
+          await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+          if (reply?.hasPhoto && reply?.photoFile) {
+            const photoInput = reply.photoFile.buffer
+              ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
+              : new InputFile(reply.photoFile.path);
+            await ctx.replyWithPhoto(photoInput, {
+              caption: reply.photoFile.caption || reply.reply,
+            });
+          } else if (reply?.hasDocument && reply?.documentFile) {
+            const docInput = reply.documentFile.buffer
+              ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
+              : new InputFile(reply.documentFile.path);
+            await ctx.replyWithDocument(docInput, {
+              caption: reply.documentFile.caption || reply.reply,
+            });
+          } else if (reply?.hasExcel && reply?.excelFile) {
+            await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
+              caption: reply.reply,
+            });
+          }
+          // Cero texto duplicado cuando hasVoice es verdadero
+        } else if (reply?.hasPhoto && reply?.photoFile) {
           const photoInput = reply.photoFile.buffer
             ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
             : new InputFile(reply.photoFile.path);
           await ctx.replyWithPhoto(photoInput, {
             caption: reply.photoFile.caption || reply.reply,
           });
-        } else if (reply?.hasVoice && reply?.voiceFile) {
-          await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
-          if (reply?.reply) {
-            await this._safeReply(ctx, reply.reply);
-          }
         } else if (reply?.hasDocument && reply?.documentFile) {
           const docInput = reply.documentFile.buffer
             ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
@@ -401,13 +418,32 @@ export class TelegramAdapter {
           },
         });
 
-        // Si generó nota de voz (Modo Espejo), enviarla primero con su onda sonora
+        // Si generó nota de voz (Modo Espejo o acción SEND_VOICE), despachar exclusivamente el audio
         if (reply?.hasVoice && reply?.voiceFile) {
           await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
-        }
 
-        // Si generó foto (ej: QR solicitado por audio)
-        if (reply?.hasPhoto && reply?.photoFile) {
+          // Si además hay adjunto gráfico o documental solicitado por audio
+          if (reply?.hasPhoto && reply?.photoFile) {
+            const photoInput = reply.photoFile.buffer
+              ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
+              : new InputFile(reply.photoFile.path);
+            await ctx.replyWithPhoto(photoInput, {
+              caption: reply.photoFile.caption || reply.reply,
+            });
+          } else if (reply?.hasExcel && reply?.excelFile) {
+            await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
+              caption: reply.reply,
+            });
+          } else if (reply?.hasDocument && reply?.documentFile) {
+            const docInput = reply.documentFile.buffer
+              ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
+              : new InputFile(reply.documentFile.path);
+            await ctx.replyWithDocument(docInput, {
+              caption: reply.documentFile.caption || reply.reply,
+            });
+          }
+          // CERO texto duplicado abajo cuando hasVoice es verdadero
+        } else if (reply?.hasPhoto && reply?.photoFile) {
           const photoInput = reply.photoFile.buffer
             ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
             : new InputFile(reply.photoFile.path);
@@ -418,8 +454,15 @@ export class TelegramAdapter {
           await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
             caption: reply.reply,
           });
+        } else if (reply?.hasDocument && reply?.documentFile) {
+          const docInput = reply.documentFile.buffer
+            ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
+            : new InputFile(reply.documentFile.path);
+          await ctx.replyWithDocument(docInput, {
+            caption: reply.documentFile.caption || reply.reply,
+          });
         } else if (reply?.reply) {
-          // Despachar también el texto estructurado para lectura rápida
+          // Fallback a texto si no hubo nota de voz
           await this._safeReply(ctx, reply.reply);
         }
       } finally {

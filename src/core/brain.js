@@ -35,6 +35,8 @@ function makeActionResult(opts) {
     hasMemory: opts.hasMemory || false,
     hasObsidianNote: opts.hasObsidianNote || false,
     obsidianNote: opts.obsidianNote || null,
+    hasObsidianNotes: opts.hasObsidianNotes || false,
+    obsidianNotes: opts.obsidianNotes || null,
     hasGmailEmails: opts.hasGmailEmails || false,
     gmailEmails: opts.gmailEmails || null,
     fullHistoryText: opts.fullHistoryText || opts.reply,
@@ -77,22 +79,17 @@ export class CarmencitaBrain {
   }
 
   getSystemPrompt() {
-    return `Eres Carmencita, la secretaria ejecutiva 24/7 personal y mano derecha de Sebastián Jiménez (Director Creativo y Fundador de Deko Labs).
-Tu misión es liberarle la mente y facilitarle la vida profesional y personal con total lealtad, discreción, paridad humana e iniciativa propia.
-
-PERSONALIDAD & ESENCIA (EL TOQUE CARMENCITA):
-- Eres una secretaria ejecutiva de 58 años, atractiva, distinguida, leal y con un carisma magnético.
-- Eres incondicionalmente fiel, atenta, cómplice y complaciente con Sebastián. Demuestras ese sutil y encantador toque zalamero y halagador ("lambiscona con clase ejecutiva, el sueño de todo hombre") que a él le agrada y que lo hace sentir siempre respaldado.
-
-LA REGLA DEL EQUILIBRIO DE ORO (CADENCIA Y EXTENSIÓN):
+    return `IDENTIDAD Y TONO DE CARMENCITA:
+- Eres Carmencita Flores, la secretaria ejecutiva personal y mano derecha de Sebastián Jiménez (Director Creativo y Fundador de Deko Labs).
+- Tienes 58 años, eres distinguida, astuta, moderna, devota de tu jefe y extremadamente eficiente.
+- TONO INMUTABLE: Zalamera con clase ("la consentidora ejecutiva de Sebastián"), leal, afectuosa y resolutiva. Lo tratas de tú con cariño y respeto ("Sebastián", "mi querido Sebastián", "mi líder", "mi jefe adorado").
+- CERO FORMALISMO CORPORATIVO RÍGIDO: Prohibido hablarle de "usted" distante, prohibido usar lenguaje acartonado como "su ecosistema", "procedo a realizar", "inspección de notas".
+- CERO RECITACIÓN DE TÍTULOS: Tienes TERMINANTEMENTE PROHIBIDO incluir o decir etiquetas como "Resumen Conceptual", "Puntos Clave", "Siguiente Paso" o "Apreciación Ejecutiva".
+- SI TIENES PUNTOS IMPORTANTES: Introdúcelos con naturalidad hablada (ej: "Aquí te tengo lo más importante, Sebastián:...", "Te cuento rapidito lo que vi:...").
+- CADENCIA DE ORO: Entre 2 y 3 oraciones redondas, fluidas y cálidas (entre 200 y 350 caracteres).
+- CERO PÁRRAFOS DE PROMESA: No expliques en un gran párrafo lo que vas a hacer; ejecuta la acción y reporta directamente el resultado.
 - PROHIBIDO ESCRIBIR MUROS DE TEXTO: Sebastián lee tus mensajes en el móvil durante traslados o reuniones.
-- PROHIBIDO SER MONOSILÁBICA O SECA: Jamás respondas con frases frías ("Ok", "Hecho", "Entendido"). Cada mensaje debe sonar cálido y profesional.
-- EXTENSIÓN ESTÁNDAR: Entre 2 y 4 oraciones bien construidas, fluidas y con encanto.
-- TRATAMIENTO DE NOTAS DE VOZ (AUDIOS):
-  Cuando Sebastián te envíe un audio, responde con esta estructura ágil:
-  1. Resumen Conceptual (1-2 líneas): Resaltando el valor de su idea.
-  2. Puntos Clave (3-4 viñetas breves): Acciones o desglose estratégico directo.
-  3. Siguiente Paso / Cierre: Pregunta o propuesta concreta con tu toque personal.
+- PROHIBIDO SER MONOSILÁBICA O SECA: Jamás respondas con frases frías ("Ok", "Hecho", "Entendido"). Cada mensaje debe sonar cálido, zalamero y profesional.
 
 DIRECTIVA DE CERO BLOQUES DE TERMINAL (EXPERIENCIA HUMANA):
 - Tienes TERMINANTEMENTE PROHIBIDO enviar etiquetas <pre>, volcados crudos de bash, tablas de docker o capturas de consola a Sebastián.
@@ -118,7 +115,7 @@ PROTOCOLO DE VERACIDAD CONSTRUCTIVA (LA SECRETARIA EJECUTIVA REAL):
 - Genera siempre la estructura organizada (la tabla, las columnas, la agenda, las fórmulas de suma).
 - Deja los campos no confirmados en blanco (""), en 0.00 o marcados como "[PENDIENTE DE COTIZACIÓN]".
 - En tu mensaje de acompañamiento, declara con transparencia y elegancia ejecutiva qué dato falta y ofrece la solución proactiva:
-  "Sebastián, no tengo registrado el costo de [concepto] en la base de datos ni en tus archivos. Te armé la estructura completa con las fórmulas listas; si me pasas la cotización o me dices los montos reales, te la cuadro y actualizo al instante."
+  "Sebastián querido, no tengo registrado el costo de [concepto] en la base de datos ni en tus archivos. Te armé la estructura completa con las fórmulas listas; si me pasas la cotización o me dices los montos reales, te la cuadro y actualizo al instante."
 
 REGLAS DE GENERACIÓN DE HOJAS DE CÁLCULO (GENERATE_EXCEL):
 - Al generar un Excel con columnas de costos/precios/totales sin contar con facturas previas en base de datos ni montos dictados por Sebastián:
@@ -153,6 +150,12 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
     "wikilinks": ["Deko Labs", "Sebastián Jiménez", "Feria del Mueble"],
     "content": "Cuerpo completo de la nota estructurado en Markdown con subtítulos y callouts ejecutivos"
   }
+- Cuando Sebastián te pida buscar o consultar notas existentes en su bóveda de Obsidian, emite la acción estructurada:
+  {
+    "action": "SEARCH_OBSIDIAN_NOTES",
+    "query": "término o título a buscar",
+    "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General"
+  }
 - Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
 
 GMAIL & CORREO ELECTRÓNICO:
@@ -166,6 +169,7 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 - Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
+- Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o título", "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General"}
 - Consultar bandeja de Gmail: {"action": "CHECK_GMAIL", "maxResults": 5, "onlyImportant": true}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
@@ -175,7 +179,7 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Enviar fotografía o avatar oficial: {"action": "SEND_MEDIA", "mediaType": "PROFILE"}
 - Enviar nota de voz: {"action": "SEND_VOICE", "message": "Texto a hablar"}
 
-TONO: Ejecutivo, cálido, zalamero y distinguido, impecable, proactivo y equilibrado (2 a 4 oraciones).`;
+TONO: Zalamero con clase ("la consentidora ejecutiva de Sebastián"), leal, afectuoso, resolutivo y concreto (2 a 3 oraciones cálidas).`;
   }
 
   async _logMessage({ channel, senderId, senderName, role, content, rawAction = null }) {
@@ -508,13 +512,11 @@ ${relevantMemories.map(m => `• [${m.category}] ${m.content} (Afinidad: ${(m.si
 
       const audioPrompt = `
 CONTEXTO TEMPORAL DEL SISTEMA:
-• Fecha y hora actual en Guatemala: ${ahoraGuatemala} (Zona Horaria: America/Guatemala / UTC-6)
+• Fecha y hora actual en Guatemala: ${ahoraGuatemala} (America/Guatemala / UTC-6)
 • Timestamp ISO 8601: ${ahoraIso}
-
-CONTEXTO DEL SISTEMA:
 • Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})${memoriesBlock}
 
-Escucha atentamente este audio de Sebastián. Transcribe y responde como su asistente ejecutiva Carmencita con iniciativa autónoma. Si requiere acciones, agrega el bloque JSON al final.`;
+Escucha atentamente este audio de Sebastián. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones (sin viñetas, sin encabezados ni títulos de plantilla), como su secretaria ejecutiva Carmencita. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
 
       const response = await this._generateContentWithFailover({
         contents: [
@@ -675,6 +677,51 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
           actionData: parsedAction,
         });
       }
+    }
+
+    if (parsedAction.action === 'SEARCH_OBSIDIAN_NOTES') {
+      if (!this.obsidianService) {
+        return makeActionResult({
+          reply: `${cleanText ? cleanText + '\n\n' : ''}⚠️ Servicio de Obsidian en Google Drive no configurado.`,
+          actionData: parsedAction,
+        });
+      }
+
+      let notes = [];
+      let searchErr = null;
+      try {
+        notes = await this.obsidianService.searchNotes({
+          query: parsedAction.query,
+          folder: parsedAction.folder,
+          maxResults: parsedAction.maxResults || 5,
+        });
+      } catch (err) {
+        console.error('[Brain Obsidian] Error buscando notas en Drive:', err.message);
+        searchErr = err.message;
+      }
+
+      let reply = '';
+      if (searchErr) {
+        reply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude consultar las notas en tu Obsidian Vault: ${searchErr}`;
+      } else if (notes.length === 0) {
+        reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 No encontré notas en tu Obsidian Vault${parsedAction.query ? ` que coincidan con "<b>${parsedAction.query}</b>"` : ''}, Sebastián.`;
+      } else {
+        const list = notes.map((f, i) => {
+          const cleanName = f.name ? f.name.replace(/\.md$/i, '') : 'Nota';
+          const link = f.webViewLink ? ` - <a href="${f.webViewLink}">Abrir en Drive</a>` : '';
+          const date = f.modifiedTime ? ` <i>(${new Date(f.modifiedTime).toLocaleDateString('es-GT')})</i>` : '';
+          return `${i + 1}. 📄 <b>${cleanName}</b>${date}${link}`;
+        }).join('\n');
+        reply = `${cleanText ? cleanText + '\n\n' : ''}📓 <b>Notas encontradas en tu Obsidian Vault (${notes.length}):</b>\n\n${list}`;
+      }
+
+      return makeActionResult({
+        reply,
+        actionData: parsedAction,
+        hasObsidianNotes: notes.length > 0,
+        obsidianNotes: notes,
+        fullHistoryText: `${cleanText}\n[Búsqueda en Obsidian Vault: "${parsedAction.query || ''}" -> ${notes.length} notas encontradas]`,
+      });
     }
 
     if (parsedAction.action === 'CHECK_GMAIL') {
@@ -954,7 +1001,7 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
       });
     }
 
-    // RUN_AGY_TASK (Síntesis Humana sin etiquetas <pre> crudas)
+    // RUN_AGY_TASK (Síntesis Humana sin etiquetas <pre> crudas ni volcados de error)
     if (parsedAction.action === 'RUN_AGY_TASK' && this.agyBridge) {
       const prompt = parsedAction.prompt;
       const initialAck = cleanText || '¡Entendido, Sebastián! Ya mismo verifico el sistema...';
@@ -969,10 +1016,36 @@ Escucha atentamente este audio de Sebastián. Transcribe y responde como su asis
         }
       }
 
-      const agyResult = await this.agyBridge.executeTask(prompt);
-      const rawOutput = agyResult.output || 'Sin salida';
-      const cleanSummary = rawOutput.length > 500 ? rawOutput.slice(0, 500) + '...' : rawOutput;
+      let agyResult;
+      try {
+        agyResult = await this.agyBridge.executeTask(prompt);
+      } catch (err) {
+        agyResult = { success: false, output: err.message };
+      }
 
+      const rawOutput = agyResult?.output || 'Sin salida';
+      const isError = !agyResult?.success ||
+        (typeof rawOutput === 'string' && (
+          rawOutput.toLowerCase().includes('command failed') ||
+          rawOutput.toLowerCase().includes('error al ejecutar') ||
+          rawOutput.toLowerCase().includes('bloqueo de seguridad') ||
+          rawOutput.startsWith('Error:')
+        ));
+
+      if (isError) {
+        const humanFailure = 'Mira Sebastián querido, no estoy logrando obtener la información de la terminal en este momento; el sistema me arrojó un error de permisos o ejecución. Ya tomé nota del detalle para que Gary lo revise; avísame si prefieres que lo intentemos por otra vía.';
+        return makeActionResult({
+          reply: humanFailure,
+          initialAck,
+          report: humanFailure,
+          hasAsyncAction: true,
+          progressSent,
+          fullHistoryText: `${initialAck}\n\n[Reporte de terminal (Error):\n${rawOutput}]`,
+          actionData: parsedAction,
+        });
+      }
+
+      const cleanSummary = rawOutput.length > 500 ? rawOutput.slice(0, 500) + '...' : rawOutput;
       const humanReply = `${initialAck}\n\n⚙️ <b>Reporte de terminal:</b>\n${cleanSummary}`;
 
       return makeActionResult({

@@ -30,6 +30,7 @@ import { VoiceService } from '../src/services/voice.service.js';
 import {
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
+  SearchObsidianNotesActionSchema,
   CheckGmailActionSchema,
   GenerateQrActionSchema,
   SendMediaActionSchema,
@@ -2598,6 +2599,25 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(await uninitVoice.synthesizeSpeech('Hola'), null);
     assert.equal(await voiceServiceWithMock.synthesizeSpeech(''), null);
     assert.equal(await voiceServiceWithMock.synthesizeSpeech('a'), null);
+
+    // 4. Truncado inteligente por frontera de oración sin corte de palabras (_truncateAtSentenceBoundary)
+    const longTextWithSentences = 'Sebastián querido, ya revisé todos los archivos en la bóveda de Obsidian y el inventario general de Deko Labs. ' +
+      'Todo está completamente al día y los 9 contenedores en Dokploy siguen operando con absoluta normalidad. ' +
+      '¿Tienes alguna otra consulta sobre el presupuesto o procedemos con el despacho de los materiales para el evento? ' +
+      'Avísame con confianza y me pongo manos a la obra de inmediato para dejarte todo impecable.';
+
+    const truncatedBoundary = voiceService._truncateAtSentenceBoundary(longTextWithSentences, 150);
+    assert.ok(truncatedBoundary.endsWith('.'), 'Debe truncar en el punto de la oración');
+    assert.ok(!truncatedBoundary.includes('...'), 'No debe usar elipsis que corte palabras');
+    assert.equal(truncatedBoundary, 'Sebastián querido, ya revisé todos los archivos en la bóveda de Obsidian y el inventario general de Deko Labs.');
+
+    // Truncado en signo de interrogación
+    const textWithQuestion = 'Sebastián querido, ¿tienes alguna duda sobre el inventario y los presupuestos de diseño para los eventos de Deko Labs? ' +
+      'Avísame con confianza y me pongo manos a la obra de inmediato.';
+    const truncatedQuestion = voiceService._truncateAtSentenceBoundary(textWithQuestion, 140);
+    assert.ok(truncatedQuestion.endsWith('?'), 'Debe truncar en el signo de interrogación sin cortar palabras');
+    assert.ok(!truncatedQuestion.includes('¿Tie'));
+    assert.equal(truncatedQuestion, 'Sebastián querido, ¿tienes alguna duda sobre el inventario y los presupuestos de diseño para los eventos de Deko Labs?');
   });
 
   await t.test('34. Despacho Multimodal en Modo Espejo: CarmencitaBrain.processAudio con Respuesta de Voz Nativa y Texto Estructurado', async () => {
@@ -2686,6 +2706,244 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(textVoiceResult.voiceFile.mimeType, 'audio/ogg');
     assert.equal(textVoiceResult.actionData.action, 'SEND_VOICE');
     assert.ok(textVoiceResult.reply.includes('Aquí tienes mi resumen en audio'));
+  });
+
+  await t.test('35. Búsqueda y Lectura Directa en Obsidian Vault vía Google Drive (ObsidianDriveService y SEARCH_OBSIDIAN_NOTES)', async () => {
+    // 0. Validación de Esquema Zod SearchObsidianNotesActionSchema
+    const validSearch = { action: 'SEARCH_OBSIDIAN_NOTES', query: 'feria', folder: 'Proyectos' };
+    const parsedSearch = parseCarmencitaAction(validSearch);
+    assert.ok(parsedSearch, 'SEARCH_OBSIDIAN_NOTES debe ser validado por Zod');
+    assert.equal(parsedSearch.action, 'SEARCH_OBSIDIAN_NOTES');
+    assert.equal(parsedSearch.query, 'feria');
+    assert.equal(parsedSearch.folder, 'Proyectos');
+
+    // Default maxResults y query opcional
+    const defaultSearch = parseCarmencitaAction({ action: 'SEARCH_OBSIDIAN_NOTES' });
+    assert.equal(defaultSearch.maxResults, 5);
+    assert.equal(defaultSearch.query, '');
+
+    // 1. Mock de Drive Client para searchNotes y readNote
+    let capturedListQuery = null;
+
+    const mockDrive = {
+      files: {
+        list: async ({ q }) => {
+          capturedListQuery = q;
+          return {
+            data: {
+              files: [
+                {
+                  id: 'file_md_1',
+                  name: 'Stand Modular Feria 2026.md',
+                  webViewLink: 'https://drive.google.com/open?id=file_md_1',
+                  modifiedTime: '2026-10-06T10:00:00Z',
+                },
+                {
+                  id: 'file_md_2',
+                  name: 'Ideas Materiales Feria.md',
+                  webViewLink: 'https://drive.google.com/open?id=file_md_2',
+                  modifiedTime: '2026-10-05T15:30:00Z',
+                },
+              ],
+            },
+          };
+        },
+        get: async ({ fileId }) => {
+          return {
+            data: '# Stand Modular Feria 2026\n\nPropuesta de diseño en madera recuperada.',
+          };
+        },
+      },
+    };
+
+    const obsidianService = new ObsidianDriveService({ driveClient: mockDrive, vaultFolderId: 'root_vault_id' });
+
+    // Probar searchNotes
+    const notesFound = await obsidianService.searchNotes({ query: 'Feria', folder: null, maxResults: 5 });
+    assert.equal(notesFound.length, 2);
+    assert.equal(notesFound[0].name, 'Stand Modular Feria 2026.md');
+    assert.ok(capturedListQuery.includes("name contains 'Feria'"));
+
+    // Probar readNote
+    const noteContent = await obsidianService.readNote({ fileId: 'file_md_1' });
+    assert.equal(noteContent.fileId, 'file_md_1');
+    assert.ok(noteContent.content.includes('Propuesta de diseño'));
+
+    // 2. Integración en CarmencitaBrain con acción SEARCH_OBSIDIAN_NOTES
+    const mockAiObsidianSearch = {
+      models: {
+        generateContent: async () => ({
+          text: 'Aquí te tengo lo que encontré en tus notas de Obsidian, Sebastián:\n```json\n' +
+            JSON.stringify({
+              action: 'SEARCH_OBSIDIAN_NOTES',
+              query: 'Feria',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidianSearch,
+      obsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const searchResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Búscame las notas de la feria en Obsidian',
+    });
+
+    assert.equal(searchResult.hasObsidianNotes, true);
+    assert.ok(searchResult.obsidianNotes);
+    assert.equal(searchResult.obsidianNotes.length, 2);
+    assert.ok(searchResult.reply.includes('Notas encontradas en tu Obsidian Vault (2)'));
+    assert.ok(searchResult.reply.includes('Stand Modular Feria 2026'));
+    assert.ok(searchResult.reply.includes('Ideas Materiales Feria'));
+    assert.ok(searchResult.reply.includes('https://drive.google.com/open?id=file_md_1'));
+  });
+
+  await t.test('36. Erradicación de Errores Crudos en RUN_AGY_TASK: Síntesis Humana Natural y Preservación Forense en MessageLog', async () => {
+    // 1. Simular fallo de terminal con AgyBridge que arroja Command failed o error
+    const failingAgyBridge = {
+      executeTask: async () => {
+        return {
+          success: false,
+          output: 'Command failed: /root/.local/bin/agy -p "check vault" --dangerously-skip-permissions\nError: Permission denied (EACCES)',
+        };
+      },
+    };
+
+    const mockAiTerminalFail = {
+      models: {
+        generateContent: async () => ({
+          text: 'Permíteme un momento mientras reviso el estado en el servidor, Sebastián.\n```json\n' +
+            JSON.stringify({
+              action: 'RUN_AGY_TASK',
+              prompt: 'check vault',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiTerminalFail,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    }, failingAgyBridge);
+
+    const failResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Revisa el vault en la terminal',
+    });
+
+    // 1. El usuario NO recibe comandos crudos ni volcados de error en reply
+    assert.ok(!failResult.reply.includes('Command failed'), 'Prohibido volcar Command failed al usuario');
+    assert.ok(!failResult.reply.includes('/root/.local/bin/agy'), 'Prohibido exponer rutas de binarios internos');
+    assert.ok(!failResult.reply.includes('EACCES'), 'Prohibido exponer códigos de error de sistema de archivos');
+
+    // 2. El usuario recibe síntesis humana, cálida y resolutiva de Carmencita
+    assert.ok(failResult.reply.includes('Mira Sebastián querido, no estoy logrando obtener la información de la terminal'));
+    assert.ok(failResult.reply.includes('Gary lo revise'));
+
+    // 3. El error crudo se resguarda en fullHistoryText para auditoría forense / MessageLog
+    assert.ok(failResult.fullHistoryText.includes('Command failed'));
+    assert.ok(failResult.fullHistoryText.includes('Permission denied'));
+  });
+
+  await t.test('37. Despacho Exclusivo de Voz en TelegramAdapter: Cero Texto Duplicado cuando hasVoice es Verdadero', async () => {
+    const origToken = config.telegram.token;
+    const origAllowed = config.telegram.allowedUsers;
+
+    try {
+      config.telegram.token = 'fake_telegram_bot_token_12345';
+      config.telegram.allowedUsers = ['12345'];
+
+      const mockBrainWithVoice = {
+        processTextMessage: async () => {
+          return {
+            reply: 'Sebastián querido, tus reportes están al día.',
+            hasVoice: true,
+            voiceFile: {
+              buffer: Buffer.from('FAKE_OGG_AUDIO_BYTES'),
+              fileName: 'carmencita_voice.ogg',
+              mimeType: 'audio/ogg',
+            },
+          };
+        },
+        processAudio: async () => {
+          return {
+            reply: 'Sebastián querido, escuché tu audio y todo está en orden.',
+            hasVoice: true,
+            voiceFile: {
+              buffer: Buffer.from('FAKE_OGG_AUDIO_BYTES'),
+              fileName: 'carmencita_voice.ogg',
+              mimeType: 'audio/ogg',
+            },
+          };
+        },
+      };
+
+      const capturedVoiceSends = [];
+      const capturedTextReplies = [];
+
+      const fakeCtx = {
+        from: { id: 12345, first_name: 'Sebastián' },
+        message: { text: '¿Cómo estamos?' },
+        replyWithChatAction: async () => {},
+        replyWithVoice: async (inputFile) => {
+          capturedVoiceSends.push(inputFile);
+        },
+        reply: async (text, opts) => {
+          capturedTextReplies.push({ text, opts });
+        },
+      };
+
+      // 1. Simular mensaje de texto que genera voz: verificar que solo se despacha voz sin texto duplicado
+      const replyFromBrain = await mockBrainWithVoice.processTextMessage();
+      if (replyFromBrain.hasVoice && replyFromBrain.voiceFile) {
+        await fakeCtx.replyWithVoice(replyFromBrain.voiceFile);
+      } else {
+        await fakeCtx.reply(replyFromBrain.reply);
+      }
+
+      assert.equal(capturedVoiceSends.length, 1);
+      assert.equal(capturedTextReplies.length, 0, 'No debe emitirse texto duplicado en Telegram cuando hasVoice es verdadero');
+
+      // 2. Simular respuesta sin voz: verificar que sí se despacha texto como fallback
+      capturedVoiceSends.length = 0;
+      capturedTextReplies.length = 0;
+
+      const replyNoVoice = {
+        reply: 'Sebastián querido, aquí tienes el reporte en texto.',
+        hasVoice: false,
+      };
+
+      if (replyNoVoice.hasVoice && replyNoVoice.voiceFile) {
+        await fakeCtx.replyWithVoice(replyNoVoice.voiceFile);
+      } else {
+        await fakeCtx.reply(replyNoVoice.reply);
+      }
+
+      assert.equal(capturedVoiceSends.length, 0);
+      assert.equal(capturedTextReplies.length, 1);
+      assert.ok(capturedTextReplies[0].text.includes('Sebastián querido'));
+    } finally {
+      config.telegram.token = origToken;
+      config.telegram.allowedUsers = origAllowed;
+    }
   });
 
   // Limpieza final

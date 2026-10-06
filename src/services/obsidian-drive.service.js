@@ -151,6 +151,62 @@ ${content}${linksBlock}
       rawContent: markdownBody,
     };
   }
+
+  async searchNotes({ query = '', folder = null, maxResults = 5 } = {}) {
+    const drive = await this._getDriveClient();
+    if (!drive) throw new Error('Google Drive no configurado para Obsidian');
+
+    const vaultId = await this.getOrCreateVaultFolder();
+    let q = `'${vaultId}' in parents and mimeType = 'text/markdown' and trashed = false`;
+    if (folder) {
+      const folderId = await this.getOrCreateSubfolder(folder);
+      q = `'${folderId}' in parents and mimeType = 'text/markdown' and trashed = false`;
+    }
+
+    if (query) {
+      const sanitized = query.replace(/'/g, "\\'");
+      q += ` and name contains '${sanitized}'`;
+    }
+
+    const res = await drive.files.list({
+      q,
+      fields: 'files(id, name, webViewLink, modifiedTime)',
+      pageSize: maxResults,
+    });
+
+    return res?.data?.files || [];
+  }
+
+  async readNote({ fileId = null, name = null, folder = null } = {}) {
+    const drive = await this._getDriveClient();
+    if (!drive) throw new Error('Google Drive no configurado para Obsidian');
+
+    let targetFileId = fileId;
+    let targetFileName = name;
+
+    if (!targetFileId && name) {
+      const found = await this.searchNotes({ query: name, folder, maxResults: 1 });
+      if (found.length > 0) {
+        targetFileId = found[0].id;
+        targetFileName = found[0].name;
+      }
+    }
+
+    if (!targetFileId) {
+      throw new Error(`Nota no encontrada${name ? `: ${name}` : ''}`);
+    }
+
+    const res = await drive.files.get({
+      fileId: targetFileId,
+      alt: 'media',
+    });
+
+    return {
+      fileId: targetFileId,
+      fileName: targetFileName,
+      content: typeof res.data === 'string' ? res.data : JSON.stringify(res.data),
+    };
+  }
 }
 
 export const defaultObsidianDriveService = new ObsidianDriveService();

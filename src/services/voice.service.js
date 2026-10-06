@@ -99,6 +99,32 @@ export class VoiceService {
   }
 
   /**
+   * Trunca texto respetando fronteras de oraciones (. ? !) para no cortar palabras
+   */
+  _truncateAtSentenceBoundary(text, maxChars = 700) {
+    if (!text || text.length <= maxChars) return text;
+
+    const sub = text.slice(0, maxChars);
+    const lastBoundary = Math.max(
+      sub.lastIndexOf('. '),
+      sub.lastIndexOf('.\n'),
+      sub.lastIndexOf('?'),
+      sub.lastIndexOf('!')
+    );
+
+    if (lastBoundary > 100) {
+      return sub.slice(0, lastBoundary + 1).trim();
+    }
+
+    const lastSpace = sub.lastIndexOf(' ');
+    if (lastSpace > 100) {
+      return sub.slice(0, lastSpace).trim() + '.';
+    }
+
+    return sub.trim() + '.';
+  }
+
+  /**
    * Genera una nota de voz natural a partir del texto
    */
   async synthesizeSpeech(text, { voiceName = this.voiceName } = {}) {
@@ -110,8 +136,8 @@ export class VoiceService {
     const clean = this._cleanTextForSpeech(text);
     if (!clean || clean.length < 2) return null;
 
-    // Truncar para síntesis si es excesivamente largo (máximo 600 caracteres ejecutivos)
-    const voiceText = clean.length > 600 ? clean.slice(0, 600) + '...' : clean;
+    // Truncar para síntesis respetando fronteras de oraciones (máximo 700 caracteres ejecutivos)
+    const voiceText = this._truncateAtSentenceBoundary(clean, 700);
 
     try {
       const response = await this.ai.models.generateContent({
