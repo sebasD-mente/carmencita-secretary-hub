@@ -2748,40 +2748,72 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(parsedSearch.query, 'feria');
     assert.equal(parsedSearch.folder, 'Proyectos');
 
-    // Default maxResults y query opcional
+    // Default maxResults elevado a 20 y query opcional
     const defaultSearch = parseCarmencitaAction({ action: 'SEARCH_OBSIDIAN_NOTES' });
-    assert.equal(defaultSearch.maxResults, 5);
+    assert.equal(defaultSearch.maxResults, 20, 'Default maxResults debe ser 20');
     assert.equal(defaultSearch.query, '');
 
-    // 1. Mock de Drive Client para searchNotes y readNote
-    let capturedListQuery = null;
+    // 1. Mock de Drive Client con Jerarquía Real y Subcarpetas Recursivas
+    let listCallCount = 0;
+    const hierarchy = {
+      root_vault_id: [
+        { id: 'f_meta', name: '00_Meta', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'f_inbox', name: '01_Inbox', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'f_projects', name: '02_Projects', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'f_areas', name: '03_Areas', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'f_obsidian', name: '.obsidian', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'file_root_1', name: 'Stand Modular Feria 2026.md', mimeType: 'text/markdown', modifiedTime: '2026-10-06T10:00:00Z' },
+        { id: 'file_root_2', name: 'Ideas Materiales Feria.md', mimeType: 'text/markdown', modifiedTime: '2026-10-05T15:30:00Z' },
+      ],
+      f_projects: [
+        { id: 'f_hub', name: 'Carmencita_Hub', mimeType: 'application/vnd.google-apps.folder' },
+        { id: 'file_proj_1', name: 'STAND IA - Vision General.md', mimeType: 'text/markdown', modifiedTime: '2026-10-06T12:00:00Z' },
+      ],
+      f_hub: [
+        { id: 'file_hub_1', name: 'Carmencita Secretary Hub.md', mimeType: 'text/markdown', modifiedTime: '2026-10-06T11:00:00Z' },
+      ],
+      f_inbox: [
+        { id: 'file_inbox_1', name: 'Hermes Agent Idea.md', mimeType: 'text/markdown', modifiedTime: '2026-10-06T09:00:00Z' },
+      ],
+      f_areas: [
+        { id: 'file_area_1', name: 'Deco Vintage Tienda de Posters.md', mimeType: 'text/markdown', modifiedTime: '2026-10-06T08:00:00Z' },
+      ],
+      f_meta: [
+        { id: 'file_meta_1', name: 'Plantilla Ejecutiva.md', mimeType: 'text/markdown', modifiedTime: '2026-10-06T07:00:00Z' },
+      ],
+      f_obsidian: [
+        { id: 'file_obs_1', name: 'app.json', mimeType: 'application/json' },
+        { id: 'file_obs_2', name: 'workspace.md', mimeType: 'text/markdown' },
+      ],
+    };
 
     const mockDrive = {
       files: {
         list: async ({ q }) => {
-          capturedListQuery = q;
-          return {
-            data: {
-              files: [
-                {
-                  id: 'file_md_1',
-                  name: 'Stand Modular Feria 2026.md',
-                  webViewLink: 'https://drive.google.com/open?id=file_md_1',
-                  modifiedTime: '2026-10-06T10:00:00Z',
-                },
-                {
-                  id: 'file_md_2',
-                  name: 'Ideas Materiales Feria.md',
-                  webViewLink: 'https://drive.google.com/open?id=file_md_2',
-                  modifiedTime: '2026-10-05T15:30:00Z',
-                },
-              ],
-            },
-          };
+          listCallCount++;
+          const parentMatch = q ? q.match(/'([^']+)' in parents/) : null;
+          if (parentMatch) {
+            const parentId = parentMatch[1];
+            return {
+              data: {
+                files: hierarchy[parentId] || [],
+              },
+            };
+          }
+          return { data: { files: [] } };
         },
         get: async ({ fileId }) => {
           return {
             data: '# Stand Modular Feria 2026\n\nPropuesta de diseño en madera recuperada.',
+          };
+        },
+        create: async ({ requestBody, media }) => {
+          return {
+            data: {
+              id: 'file_new_123',
+              name: requestBody.name,
+              webViewLink: 'https://drive.google.com/file/d/file_new_123/view',
+            },
           };
         },
       },
@@ -2789,23 +2821,57 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
 
     const obsidianService = new ObsidianDriveService({ driveClient: mockDrive, vaultFolderId: 'root_vault_id' });
 
-    // Probar searchNotes recursiva/flexible (sin limitarse a hijos directos de la raíz cuando folder es null)
+    // 2. Validación de Recorrido Recursivo en _buildVaultTree() y Exclusión de .obsidian
+    const allTreeFiles = await obsidianService._buildVaultTree();
+    assert.equal(allTreeFiles.length, 7, 'Debe indexar exactamente las 7 notas válidas');
+    assert.ok(!allTreeFiles.some(f => f.name === 'workspace.md'), 'Debe excluir archivos de .obsidian');
+    assert.ok(allTreeFiles.some(f => f.relativePath === '02_Projects/Carmencita_Hub/Carmencita Secretary Hub.md'), 'Debe construir ruta relativa de subcarpetas');
+
+    // 3. Validación de Caché con TTL (Llamadas repetidas no deben invocar la API de Drive)
+    const initialCallCount = listCallCount;
+    const cachedTree = await obsidianService._buildVaultTree();
+    assert.equal(cachedTree.length, 7);
+    assert.equal(listCallCount, initialCallCount, 'El caché con TTL debe evitar llamadas redundantes a Drive');
+
+    // 4. Búsqueda Específica con Coincidencias en Memoria
     const notesFound = await obsidianService.searchNotes({ query: 'Feria', folder: null, maxResults: 5 });
     assert.equal(notesFound.length, 2);
     assert.equal(notesFound[0].name, 'Stand Modular Feria 2026.md');
-    assert.ok(capturedListQuery.includes("name contains 'Feria'"));
-    assert.ok(!capturedListQuery.includes('in parents'), 'Búsqueda general no debe limitar a hijos directos de un root');
+    assert.equal(notesFound[1].name, 'Ideas Materiales Feria.md');
 
-    // Probar searchNotes con carpeta específica
-    const notesInFolder = await obsidianService.searchNotes({ query: 'Feria', folder: 'Proyectos', maxResults: 5 });
-    assert.ok(capturedListQuery.includes("in parents"), 'Búsqueda con carpeta debe filtrar por parents');
+    // Búsqueda en Subcarpeta Profunda
+    const standIaNotes = await obsidianService.searchNotes({ query: 'STAND IA' });
+    assert.equal(standIaNotes.length, 1);
+    assert.equal(standIaNotes[0].cleanTitle, 'STAND IA - Vision General');
 
-    // Probar readNote
-    const noteContent = await obsidianService.readNote({ fileId: 'file_md_1' });
-    assert.equal(noteContent.fileId, 'file_md_1');
+    // Búsqueda por Carpeta Específica
+    const projectsNotes = await obsidianService.listAllNotes({ folder: '02_Projects' });
+    assert.equal(projectsNotes.length, 2);
+    assert.ok(projectsNotes.some(n => n.name === 'Carmencita Secretary Hub.md'));
+    assert.ok(projectsNotes.some(n => n.name === 'STAND IA - Vision General.md'));
+
+    // 5. Búsqueda Panorámica Inteligente (Detección de Queries Genéricas como "reporte" o "")
+    const reportNotes = await obsidianService.searchNotes({ query: 'reporte' });
+    assert.equal(reportNotes.length, 7, 'Query "reporte" debe comportarse como listAllNotes panorámico');
+
+    const emptyQueryNotes = await obsidianService.searchNotes({ query: '' });
+    assert.equal(emptyQueryNotes.length, 7, 'Query vacía debe retornar todas las notas de la bóveda');
+
+    // 6. Invalidación Automática de Caché al Invocar createNote()
+    assert.ok(obsidianService._vaultCache.timestamp > 0);
+    await obsidianService.createNote({
+      title: 'Nueva Nota de Prueba',
+      content: 'Contenido de prueba',
+      folder: '01_Inbox',
+    });
+    assert.equal(obsidianService._vaultCache.timestamp, 0, 'createNote debe invalidar el timestamp del caché a 0');
+
+    // 7. Prueba de Lectura Directa readNote()
+    const noteContent = await obsidianService.readNote({ fileId: 'file_root_1' });
+    assert.equal(noteContent.fileId, 'file_root_1');
     assert.ok(noteContent.content.includes('Propuesta de diseño'));
 
-    // 2. Integración en CarmencitaBrain con acción SEARCH_OBSIDIAN_NOTES
+    // 8. Integración en CarmencitaBrain: Búsqueda Puntual (Feria)
     const mockAiObsidianSearch = {
       models: {
         generateContent: async () => ({
@@ -2844,10 +2910,63 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(searchResult.reply.includes('Ideas Materiales Feria'));
     assert.ok(!searchResult.reply.includes('Entro a revisar'), 'Cero frases de promesa previa en la respuesta final');
 
-    // 3. Verificación de búsqueda sin resultados (cero notas)
+    // 9. Integración en CarmencitaBrain: Consulta Panorámica ("dame un reporte de mis notas")
+    const mockAiObsidianPanoramic = {
+      models: {
+        generateContent: async () => ({
+          text: '```json\n' +
+            JSON.stringify({
+              action: 'SEARCH_OBSIDIAN_NOTES',
+              query: '',
+              maxResults: 20,
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const panoramicBrain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidianPanoramic,
+      obsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const panoramicResult = await panoramicBrain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: '¿Qué notas tengo activas en mi Obsidian?',
+    });
+
+    assert.equal(panoramicResult.hasObsidianNotes, true);
+    assert.ok(panoramicResult.reply.includes('ya revisé a fondo tu Obsidian Vault y tienes activas 7 notas'));
+    assert.ok(panoramicResult.reply.includes('Proyectos'));
+    assert.ok(panoramicResult.reply.includes('Inbox'));
+    assert.ok(panoramicResult.reply.includes('Áreas'));
+    assert.ok(panoramicResult.reply.includes('Meta'));
+    assert.ok(panoramicResult.reply.includes('¿Deseas que profundice en alguna en particular?'));
+
+    // 10. Verificación de Búsqueda sin Resultados (Cero Notas)
+    const mockAiObsidianNotFound = {
+      models: {
+        generateContent: async () => ({
+          text: '```json\n' +
+            JSON.stringify({
+              action: 'SEARCH_OBSIDIAN_NOTES',
+              query: 'Inexistente',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
     const emptyBrain = new CarmencitaBrain({
       prisma: mockPrisma,
-      ai: mockAiObsidianSearch,
+      ai: mockAiObsidianNotFound,
       obsidianService: {
         searchNotes: async () => [],
       },
@@ -2856,14 +2975,22 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       ideaService,
       excelService,
     });
+
     const emptyResult = await emptyBrain.processTextMessage({
       channel: 'telegram',
       senderId: '12345',
       senderName: 'Sebastián',
-      text: 'Búscame las notas de la feria en Obsidian',
+      text: 'Búscame notas de algo inexistente',
     });
-    assert.ok(emptyResult.reply.includes('no encontré notas con el término "Feria"'));
-    assert.ok(!emptyResult.reply.includes('Entro a revisar'), 'Cero promesas vacías al no encontrar notas');
+    assert.ok(emptyResult.reply.includes('no encontré notas con el término "Inexistente"'));
+
+    // 11. Blindaje Anti-AGY en el System Prompt
+    const systemPrompt = brain.getSystemPrompt();
+    assert.ok(systemPrompt.includes('PROHIBIDO terminantemente emitir RUN_AGY_TASK para consultar, listar o buscar notas en Obsidian'));
+    assert.ok(systemPrompt.includes('00_Meta'));
+    assert.ok(systemPrompt.includes('01_Inbox'));
+    assert.ok(systemPrompt.includes('02_Projects'));
+    assert.ok(systemPrompt.includes('03_Areas'));
   });
 
   await t.test('36. Erradicación de Errores Crudos en RUN_AGY_TASK: Síntesis Humana Natural y Preservación Forense en MessageLog', async () => {

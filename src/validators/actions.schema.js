@@ -152,7 +152,7 @@ export const SaveObsidianNoteActionSchema = z.object({
   action: z.literal('SAVE_OBSIDIAN_NOTE'),
   title: z.string().min(1, 'El título de la nota es obligatorio'),
   content: z.string().min(1, 'El contenido de la nota es obligatorio'),
-  folder: z.enum(['Inbox', 'Ideas', 'Proyectos', 'Reuniones', 'Proveedores', 'General']).default('Inbox'),
+  folder: z.string().default('01_Inbox'),
   tags: z.array(z.string()).default([]),
   wikilinks: z.array(z.string()).default([]),
   summary: z.string().optional(),
@@ -162,7 +162,7 @@ export const SearchObsidianNotesActionSchema = z.object({
   action: z.literal('SEARCH_OBSIDIAN_NOTES'),
   query: z.string().optional().default(''),
   folder: z.string().optional().nullable(),
-  maxResults: z.number().optional().default(5),
+  maxResults: z.number().optional().default(20), // Elevado de 5 a 20
 });
 
 export const CheckGmailActionSchema = z.object({

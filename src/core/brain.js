@@ -141,20 +141,30 @@ MEMORIA PERMANENTE Y APRENDIZAJE CONTINUO:
 
 BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
 - Estás conectada directamente al Obsidian Vault de Sebastián en Google Drive.
+- TAXONOMÍA REAL DE LA BÓVEDA DE SEBASTIÁN:
+  • 00_Meta: Índice general (Index.md) y plantillas ejecutivas.
+  • 01_Inbox: Borradores, notas rápidas e ideas entrantes sin clasificar.
+  • 02_Projects: Proyectos activos de Deko Labs (STAND IA, Web Deco Vintage, DeKo Labs Web, Carmencita Hub, Laboratorio Vision).
+  • 03_Areas: Áreas de negocio continuas (Deco Vintage Tienda de Posters).
 - Cuando Sebastián te pida guardar una nota, registrar una idea creativa, acta de reunión, apunte de diseño, ficha de proveedor o concepto duradero para Obsidian (o cuando detectes que una propuesta conceptual debe guardarse en su segundo cerebro), emite la acción estructurada:
   {
     "action": "SAVE_OBSIDIAN_NOTE",
     "title": "Título conciso y descriptivo",
-    "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General",
+    "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|General",
     "tags": ["deko-labs", "diseño", "stands"],
     "wikilinks": ["Deko Labs", "Sebastián Jiménez", "Feria del Mueble"],
     "content": "Cuerpo completo de la nota estructurado en Markdown con subtítulos y callouts ejecutivos"
   }
-- Cuando Sebastián te pida buscar o consultar notas existentes en su bóveda de Obsidian, emite la acción estructurada:
+- DIRECTIVA DE BÚSQUEDA PANORÁMICA:
+  Cuando Sebastián pregunte de forma general qué notas tiene, pida un resumen de su bóveda o un reporte general de Obsidian, emite SEARCH_OBSIDIAN_NOTES con query: "" (cadena vacía) y maxResults: 20 para traer el panorama completo.
+- BLINDAJE TAXATIVO ANTI-AGY:
+  PROHIBIDO terminantemente emitir RUN_AGY_TASK para consultar, listar o buscar notas en Obsidian. Carmencita NUNCA debe enviar comandos de terminal para resolver tareas de su Segundo Cerebro; debe usar siempre SEARCH_OBSIDIAN_NOTES o SAVE_OBSIDIAN_NOTE a través de su propio conector.
+- Cuando Sebastián te pida buscar notas existentes en su bóveda de Obsidian, emite la acción estructurada:
   {
     "action": "SEARCH_OBSIDIAN_NOTES",
-    "query": "término o título a buscar",
-    "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General"
+    "query": "término o título a buscar (o vacío para panorama completo)",
+    "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional",
+    "maxResults": 20
   }
 - Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
 
@@ -168,8 +178,8 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
 - Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
-- Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
-- Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o título", "folder": "Ideas|Reuniones|Proyectos|Inbox|Proveedores|General"}
+- Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
+- Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o vacío para reporte general", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional", "maxResults": 20}
 - Consultar bandeja de Gmail: {"action": "CHECK_GMAIL", "maxResults": 5, "onlyImportant": true}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
@@ -685,7 +695,7 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         notes = await this.obsidianService.searchNotes({
           query: parsedAction.query,
           folder: parsedAction.folder,
-          maxResults: parsedAction.maxResults || 5,
+          maxResults: parsedAction.maxResults || 20,
         });
       } catch (err) {
         console.error('[Brain Obsidian] Error buscando notas en Drive:', err.message);
@@ -698,8 +708,68 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
       } else if (notes.length === 0) {
         reply = `Sebastián querido, ya revisé directamente en tu Obsidian Vault y no encontré notas${parsedAction.query ? ` con el término "${parsedAction.query}"` : ''}. Si deseas, indícame en qué carpeta buscar o te la creo de inmediato.`;
       } else {
-        const titulos = notes.slice(0, 3).map((f) => f.name.replace(/\.md$/i, '')).join(', ');
-        reply = `Sebastián querido, ya te encontré ${notes.length} nota(s) en tu Obsidian: ${titulos}. ¿Deseas que te lea alguna de ellas o te prepare un resumen ejecutivo?`;
+        const rawQ = (parsedAction.query || '').trim();
+        const normQ = rawQ.toLowerCase();
+        const GENERIC_KEYWORDS = [
+          'reporte', 'resumen', 'notas', 'todas', 'todo', 'general',
+          'lista', 'listado', 'boveda', 'bóveda', 'segundo cerebro', 'obsidian',
+        ];
+        const isPanoramic = !rawQ || GENERIC_KEYWORDS.includes(normQ);
+
+        if (isPanoramic) {
+          const groups = {};
+          for (const note of notes) {
+            let cat = 'General';
+            const fp = (note.folderPath || note.relativePath || '').toLowerCase();
+            if (fp.includes('project') || fp.includes('proyecto') || fp.includes('02_')) {
+              cat = 'Proyectos';
+            } else if (fp.includes('inbox') || fp.includes('01_')) {
+              cat = 'Inbox';
+            } else if (fp.includes('area') || fp.includes('área') || fp.includes('03_')) {
+              cat = 'Áreas';
+            } else if (fp.includes('meta') || fp.includes('00_')) {
+              cat = 'Meta';
+            }
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(note.cleanTitle || note.name.replace(/\.md$/i, ''));
+          }
+
+          const formatList = (arr) => {
+            if (!arr || arr.length === 0) return '';
+            if (arr.length === 1) return arr[0];
+            if (arr.length === 2) return `${arr[0]} y ${arr[1]}`;
+            return `${arr.slice(0, -1).join(', ')} y ${arr[arr.length - 1]}`;
+          };
+
+          const parts = [];
+          if (groups['Proyectos']?.length) {
+            parts.push(`en Proyectos tienes ${formatList(groups['Proyectos'].slice(0, 3))}`);
+          }
+          if (groups['Inbox']?.length) {
+            parts.push(`en Inbox tienes ${formatList(groups['Inbox'].slice(0, 3))}`);
+          }
+          if (groups['Áreas']?.length) {
+            parts.push(`en Áreas tienes ${formatList(groups['Áreas'].slice(0, 3))}`);
+          }
+          if (groups['Meta']?.length) {
+            parts.push(`en Meta tienes ${formatList(groups['Meta'].slice(0, 3))}`);
+          }
+          if (groups['General']?.length && parts.length === 0) {
+            parts.push(`tienes ${formatList(groups['General'].slice(0, 5))}`);
+          }
+
+          const breakdown = parts.length > 0
+            ? parts.join('; ') + '.'
+            : `${notes.slice(0, 5).map(n => n.cleanTitle || n.name.replace(/\.md$/i, '')).join(', ')}.`;
+
+          reply = `Sebastián querido, ya revisé a fondo tu Obsidian Vault y tienes activas ${notes.length} notas. ${breakdown.charAt(0).toUpperCase() + breakdown.slice(1)} ¿Deseas que profundice en alguna en particular?`;
+        } else {
+          const titulos = notes.slice(0, 5).map((f) => {
+            const base = f.cleanTitle || f.name.replace(/\.md$/i, '');
+            return f.folderPath ? `${base} (${f.folderPath})` : base;
+          }).join(', ');
+          reply = `Sebastián querido, ya te encontré ${notes.length} nota(s) en tu Obsidian: ${titulos}. ¿Deseas que te lea alguna de ellas o te prepare un resumen ejecutivo?`;
+        }
       }
 
       return makeActionResult({

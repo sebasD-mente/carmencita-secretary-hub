@@ -1,5 +1,20 @@
 import { config } from '../config.js';
 
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function matchesSearchTerm(target, term) {
+  if (!target || !term) return false;
+  const targetLower = target.toLowerCase();
+  const termLower = term.toLowerCase();
+  if (term.length <= 2) {
+    const rx = new RegExp(`(^|[^a-záéíóúüñ0-9])${escapeRegExp(termLower)}([^a-záéíóúüñ0-9]|$)`, 'i');
+    return rx.test(targetLower);
+  }
+  return targetLower.includes(termLower);
+}
+
 export class ObsidianDriveService {
   constructor({
     clientId = config.google?.clientId,
@@ -8,6 +23,7 @@ export class ObsidianDriveService {
     vaultFolderName = config.obsidian?.vaultFolderName || 'vault',
     vaultFolderId = config.obsidian?.vaultFolderId || '',
     driveClient = null,
+    cacheTtlMs = 5 * 60 * 1000,
   } = {}) {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
@@ -16,6 +32,14 @@ export class ObsidianDriveService {
     this.vaultFolderId = vaultFolderId || null;
     this.driveClient = driveClient;
     this.cachedSubfolderIds = new Map();
+
+    // Caché en memoria para el árbol del Vault (TTL de 5 minutos)
+    this._vaultCache = {
+      timestamp: 0,
+      files: [],          // Array de objetos { id, name, cleanTitle, relativePath, folderPath, modifiedTime, webViewLink }
+      folders: new Map(), // Map<folderPath, folderId>
+    };
+    this._cacheTtlMs = cacheTtlMs;
   }
 
   async _getDriveClient() {
@@ -68,38 +92,243 @@ export class ObsidianDriveService {
     if (!subfolderName || subfolderName === '.' || subfolderName === '/') return rootId;
 
     const normalizedName = subfolderName.replace(/^\/+|\/+$/g, '');
+    if (this._vaultCache?.folders?.has(normalizedName)) {
+      return this._vaultCache.folders.get(normalizedName);
+    }
     if (this.cachedSubfolderIds.has(normalizedName)) {
       return this.cachedSubfolderIds.get(normalizedName);
     }
 
     const drive = await this._getDriveClient();
-    const search = await drive.files.list({
-      q: `'${rootId}' in parents and name = '${normalizedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'files(id, name)',
-      pageSize: 1,
-    });
+    if (!drive) throw new Error('Google Drive no configurado');
 
-    if (search?.data?.files && search.data.files.length > 0) {
-      const folderId = search.data.files[0].id;
-      this.cachedSubfolderIds.set(normalizedName, folderId);
-      return folderId;
+    const segments = normalizedName.split('/').filter(Boolean);
+    let currentParentId = rootId;
+    let accumulatedPath = '';
+
+    for (const segment of segments) {
+      accumulatedPath = accumulatedPath ? `${accumulatedPath}/${segment}` : segment;
+      if (this.cachedSubfolderIds.has(accumulatedPath)) {
+        currentParentId = this.cachedSubfolderIds.get(accumulatedPath);
+        continue;
+      }
+      if (this._vaultCache?.folders?.has(accumulatedPath)) {
+        currentParentId = this._vaultCache.folders.get(accumulatedPath);
+        continue;
+      }
+
+      const search = await drive.files.list({
+        q: `'${currentParentId}' in parents and name = '${segment.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id, name)',
+        pageSize: 1,
+      });
+
+      if (search?.data?.files && search.data.files.length > 0) {
+        currentParentId = search.data.files[0].id;
+      } else {
+        const created = await drive.files.create({
+          requestBody: {
+            name: segment,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [currentParentId],
+          },
+          fields: 'id, name',
+        });
+        currentParentId = created?.data?.id;
+      }
+
+      this.cachedSubfolderIds.set(accumulatedPath, currentParentId);
+      if (this._vaultCache?.folders) {
+        this._vaultCache.folders.set(accumulatedPath, currentParentId);
+      }
     }
 
-    const created = await drive.files.create({
-      requestBody: {
-        name: normalizedName,
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [rootId],
-      },
-      fields: 'id, name',
-    });
-
-    const folderId = created?.data?.id;
-    this.cachedSubfolderIds.set(normalizedName, folderId);
-    return folderId;
+    return currentParentId;
   }
 
-  async createNote({ title, content, folder = 'Inbox', tags = [], wikilinks = [] }) {
+  async _buildVaultTree({ forceRefresh = false } = {}) {
+    const isCacheValid = !forceRefresh &&
+      (Date.now() - this._vaultCache.timestamp < this._cacheTtlMs) &&
+      this._vaultCache.files.length > 0;
+
+    if (isCacheValid) {
+      return this._vaultCache.files;
+    }
+
+    const drive = await this._getDriveClient();
+    if (!drive) throw new Error('Google Drive no configurado para Obsidian');
+
+    const rootFolderId = await this.getOrCreateVaultFolder();
+    if (!rootFolderId) throw new Error('No se pudo obtener la carpeta raíz del Obsidian Vault');
+
+    const collectedFiles = [];
+    const collectedFoldersMap = new Map();
+    collectedFoldersMap.set('', rootFolderId);
+
+    const folderQueue = [{ folderId: rootFolderId, folderPath: '' }];
+
+    while (folderQueue.length > 0) {
+      const { folderId: currentFolderId, folderPath: currentFolderPath } = folderQueue.shift();
+      let pageToken = null;
+
+      do {
+        const res = await drive.files.list({
+          q: `'${currentFolderId}' in parents and trashed = false`,
+          fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)',
+          pageSize: 100,
+          pageToken: pageToken || undefined,
+        });
+
+        const files = res?.data?.files || [];
+        for (const item of files) {
+          if (item.mimeType === 'application/vnd.google-apps.folder') {
+            if (item.name === '.obsidian' || item.name?.startsWith('.obsidian')) {
+              continue;
+            }
+            const childFolderPath = currentFolderPath ? `${currentFolderPath}/${item.name}` : item.name;
+            collectedFoldersMap.set(childFolderPath, item.id);
+            this.cachedSubfolderIds.set(childFolderPath, item.id);
+            folderQueue.push({ folderId: item.id, folderPath: childFolderPath });
+          } else {
+            const isMd = (item.name && item.name.toLowerCase().endsWith('.md')) ||
+                         item.mimeType === 'text/markdown' ||
+                         item.mimeType === 'text/plain';
+            if (isMd) {
+              if (currentFolderPath.startsWith('.obsidian') || (item.name && item.name.startsWith('.obsidian'))) {
+                continue;
+              }
+              const cleanTitle = item.name ? item.name.replace(/\.md$/i, '') : '';
+              const relativePath = currentFolderPath ? `${currentFolderPath}/${item.name}` : item.name;
+
+              collectedFiles.push({
+                id: item.id,
+                name: item.name,
+                cleanTitle,
+                relativePath,
+                folderPath: currentFolderPath,
+                modifiedTime: item.modifiedTime,
+                webViewLink: item.webViewLink,
+              });
+            }
+          }
+        }
+
+        pageToken = res?.data?.nextPageToken;
+      } while (pageToken);
+    }
+
+    this._vaultCache = {
+      timestamp: Date.now(),
+      files: collectedFiles,
+      folders: collectedFoldersMap,
+    };
+
+    return this._vaultCache.files;
+  }
+
+  async listAllNotes({ folder = null, maxResults = 50 } = {}) {
+    const files = await this._buildVaultTree();
+    let result = files.filter(f => !f.folderPath?.includes('.obsidian') && !f.relativePath?.includes('.obsidian/'));
+
+    if (folder && folder.trim()) {
+      const target = folder.trim().toLowerCase();
+      result = result.filter(f =>
+        (f.folderPath && f.folderPath.toLowerCase().includes(target)) ||
+        (f.relativePath && f.relativePath.toLowerCase().includes(target))
+      );
+    }
+
+    result.sort((a, b) => {
+      if (a.modifiedTime && b.modifiedTime) {
+        return new Date(b.modifiedTime) - new Date(a.modifiedTime);
+      }
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    return result.slice(0, maxResults);
+  }
+
+  async searchNotes({ query = '', folder = null, maxResults = 20 } = {}) {
+    const cleanQuery = (query || '').trim();
+    const normalizedQuery = cleanQuery.toLowerCase();
+
+    const GENERIC_KEYWORDS = [
+      'reporte', 'resumen', 'notas', 'todas', 'todo', 'general',
+      'lista', 'listado', 'boveda', 'bóveda', 'segundo cerebro', 'obsidian',
+    ];
+
+    const isGeneric = !cleanQuery || GENERIC_KEYWORDS.includes(normalizedQuery);
+
+    if (isGeneric) {
+      return this.listAllNotes({ folder, maxResults });
+    }
+
+    const files = await this._buildVaultTree();
+
+    const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+    let matched = files.filter(f => {
+      if (f.folderPath?.includes('.obsidian') || f.relativePath?.includes('.obsidian/')) {
+        return false;
+      }
+      if (folder && folder.trim()) {
+        const target = folder.trim().toLowerCase();
+        const inFolder = (f.folderPath && f.folderPath.toLowerCase().includes(target)) ||
+                         (f.relativePath && f.relativePath.toLowerCase().includes(target));
+        if (!inFolder) return false;
+      }
+
+      const cleanTitle = (f.cleanTitle || '').toLowerCase();
+      const relativePath = (f.relativePath || '').toLowerCase();
+      const name = (f.name || '').toLowerCase();
+
+      if (cleanTitle.includes(normalizedQuery) || relativePath.includes(normalizedQuery) || name.includes(normalizedQuery)) {
+        return true;
+      }
+
+      return terms.length > 0 && terms.every(t =>
+        matchesSearchTerm(cleanTitle, t) || matchesSearchTerm(relativePath, t) || matchesSearchTerm(name, t)
+      );
+    });
+
+    matched.sort((a, b) => {
+      if (a.modifiedTime && b.modifiedTime) {
+        return new Date(b.modifiedTime) - new Date(a.modifiedTime);
+      }
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    if (matched.length > 0) {
+      return matched.slice(0, maxResults);
+    }
+
+    // Fallback directo a Drive API si el árbol estaba vacío
+    if (this._vaultCache.files.length === 0) {
+      try {
+        const drive = await this._getDriveClient();
+        if (drive) {
+          let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
+          if (folder) {
+            const folderId = await this.getOrCreateSubfolder(folder);
+            q += ` and '${folderId}' in parents`;
+          }
+          const sanitized = cleanQuery.replace(/'/g, "\\'");
+          q += ` and name contains '${sanitized}'`;
+          const res = await drive.files.list({
+            q,
+            fields: 'files(id, name, webViewLink, modifiedTime, parents)',
+            pageSize: Math.max(maxResults, 20),
+          });
+          return res?.data?.files || [];
+        }
+      } catch (err) {
+        console.warn('[ObsidianDriveService] Fallback searchNotes error:', err.message);
+      }
+    }
+
+    return [];
+  }
+
+  async createNote({ title, content, folder = '01_Inbox', tags = [], wikilinks = [] }) {
     const drive = await this._getDriveClient();
     if (!drive) throw new Error('Google Drive no configurado para Obsidian');
 
@@ -143,6 +372,9 @@ ${content}${linksBlock}
       fields: 'id, name, webViewLink, parents',
     });
 
+    // Invalidar caché en memoria del Vault tras crear nota exitosamente
+    this._vaultCache.timestamp = 0;
+
     return {
       fileId: createdFile?.data?.id,
       fileName,
@@ -150,33 +382,6 @@ ${content}${linksBlock}
       webViewLink: createdFile?.data?.webViewLink,
       rawContent: markdownBody,
     };
-  }
-
-  async searchNotes({ query = '', folder = null, maxResults = 5 } = {}) {
-    const drive = await this._getDriveClient();
-    if (!drive) throw new Error('Google Drive no configurado para Obsidian');
-
-    let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
-
-    if (folder) {
-      const folderId = await this.getOrCreateSubfolder(folder);
-      q += ` and '${folderId}' in parents`;
-    }
-
-    if (query && query.trim()) {
-      const sanitized = query.trim().replace(/'/g, "\\'");
-      q += ` and name contains '${sanitized}'`;
-    } else {
-      q += " and (name contains '.md' or mimeType = 'text/markdown' or mimeType = 'text/plain')";
-    }
-
-    const res = await drive.files.list({
-      q,
-      fields: 'files(id, name, webViewLink, modifiedTime, parents)',
-      pageSize: maxResults,
-    });
-
-    return res?.data?.files || [];
   }
 
   async readNote({ fileId = null, name = null, folder = null } = {}) {
@@ -212,3 +417,4 @@ ${content}${linksBlock}
 }
 
 export const defaultObsidianDriveService = new ObsidianDriveService();
+
