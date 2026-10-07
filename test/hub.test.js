@@ -40,6 +40,7 @@ import {
 import { config } from '../src/config.js';
 
 // Setup de configuración y credenciales para pruebas de seguridad
+process.env.NODE_ENV = 'test';
 config.apiKey = 'test-secret-key-2026';
 config.whatsapp.allowedNumbers = ['50212345678'];
 config.obsidian.vaultFolderId = ''; // <--- AISLAMIENTO DE PRODUCCIÓN
@@ -387,8 +388,20 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
   const mockPrisma = new MockPrismaClient();
   setPrismaClient(mockPrisma);
 
+  const mockGoogleTasksService = {
+    isConfigured: () => false,
+    createTask: async ({ title, notes, due }) => ({
+      id: `mock-gtask-${Date.now()}`,
+      title,
+      notes,
+      due,
+      status: 'needsAction',
+    }),
+    listTasks: async () => [],
+  };
+
   const documentService = new DocumentService(mockPrisma, storageProvider);
-  const taskService = new TaskService(mockPrisma);
+  const taskService = new TaskService(mockPrisma, mockGoogleTasksService);
   const ideaService = new IdeaService(mockPrisma);
   const excelService = new ExcelService();
 
@@ -1291,6 +1304,11 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
 
     const googleTasksService = new GoogleTasksService({ tasksClient: mockTasksClient });
     assert.equal(googleTasksService.isConfigured(), true);
+
+    // 0. Aislamiento estricto de producción: verificar que el servicio sin mock se autodesactiva en entorno de pruebas
+    const unconfiguredTasksService = new GoogleTasksService();
+    assert.equal(unconfiguredTasksService.isConfigured(), false, 'GoogleTasksService sin tasksClient debe autodesactivarse en entorno de pruebas');
+    assert.equal(mockGoogleTasksService.isConfigured(), false, 'mockGoogleTasksService de la suite debe reportar no configurado');
 
     // 1. Probar inserción directa en GoogleTasksService
     const createdGTask = await googleTasksService.createTask({

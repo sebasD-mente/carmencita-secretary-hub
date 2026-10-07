@@ -95,13 +95,25 @@ export class TaskService {
     });
 
     // Sincronización en segundo plano con Google Tasks (sin bloquear la respuesta)
-    if (this.googleTasksService?.isConfigured?.()) {
+    const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+    const isDefaultProductionService = this.googleTasksService === defaultGoogleTasksService;
+    const shouldSync = (!isTestEnv || !isDefaultProductionService) && this.googleTasksService?.isConfigured?.();
+
+    if (shouldSync) {
       this.googleTasksService.createTask({
         title: task.description,
         notes: `Prioridad: ${task.priority} | Creada desde Carmencita Hub`,
+        due: task.dueDate ? task.dueDate.toISOString() : undefined,
         dueDate: task.dueDate,
+      }).then((gTask) => {
+        if (gTask?.id && task.id && this.prisma?.task?.update) {
+          this.prisma.task.update({
+            where: { id: task.id },
+            data: { googleTaskId: gTask.id },
+          }).catch((err) => console.warn('[TaskService] Error actualizando googleTaskId:', err.message));
+        }
       }).catch((err) => {
-        console.warn('[TaskService] Falló sincronización en segundo plano con Google Tasks:', err.message);
+        console.warn('[TaskService] Error sincronizando con Google Tasks:', err.message);
       });
     }
 
