@@ -169,8 +169,11 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
 - Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
 
 GMAIL & CORREO ELECTRÓNICO:
-- Si Sebastián te pide revisar sus correos, qué hay en su bandeja de entrada, o si tiene correos nuevos de clientes o proveedores, emite:
-  {"action": "CHECK_GMAIL", "maxResults": 5, "onlyImportant": true}
+- Si Sebastián te pide revisar sus correos generales de la bandeja de entrada, emite:
+  {"action": "CHECK_GMAIL", "query": "", "maxResults": 5, "onlyImportant": true}
+- Si Sebastián te pide buscar un correo específico (por remitente, asunto, empresa o tema, ej: "el correo de Google AI Studio", "el correo de Figma", "la notificación de ayer"):
+  emite: {"action": "CHECK_GMAIL", "query": "términos clave de búsqueda (ej: Google AI Studio)", "maxResults": 5, "onlyImportant": false}
+- Carmencita leerá el contenido del correo y formulará un resumen ejecutivo claro en su respuesta. Si el usuario interactúa por voz o pide resumen en audio, Carmencita responderá con una nota de voz.
 
 ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
@@ -180,7 +183,7 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 - Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
 - Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o vacío para reporte general", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional", "maxResults": 20}
-- Consultar bandeja de Gmail: {"action": "CHECK_GMAIL", "maxResults": 5, "onlyImportant": true}
+- Consultar bandeja o buscar correos en Gmail: {"action": "CHECK_GMAIL", "query": "términos clave o vacío para bandeja general", "maxResults": 5, "onlyImportant": false}
 - Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
@@ -332,7 +335,20 @@ Mensaje de Sebastián:
       });
 
       const replyText = response.text || 'Entendido, Sebastián.';
-      const actionResult = await this._executeExtractedActions(replyText, onProgress);
+      const actionResult = await this._executeExtractedActions(replyText, onProgress, { userText: text, channel, senderId, senderName });
+
+      if (!actionResult.hasVoice && this.voiceService && /audio|voz|resumen en audio|nota de voz/i.test(text)) {
+        try {
+          const voiceFile = await this.voiceService.synthesizeSpeech(actionResult.reply);
+          if (voiceFile) {
+            actionResult.hasVoice = true;
+            actionResult.voiceFile = voiceFile;
+          }
+        } catch (vErr) {
+          console.warn('[Brain Text Voice] Error generando voz para respuesta de texto:', vErr.message);
+        }
+      }
+
       const historyContent = actionResult.fullHistoryText || actionResult.reply || replyText;
 
       await this._logMessage({
@@ -358,29 +374,49 @@ Mensaje de Sebastián:
       const doc = await this.documentService.saveDocument({
         buffer,
         originalName: 'foto_recibida.jpg',
-        mimeType,
-        category: 'FACTURA',
+        mimeType: mimeType || 'image/jpeg',
+        category: 'GENERAL',
         summary: caption || 'Foto guardada sin OCR automático',
       });
-      return `📎 ¡Recibí la foto! La he resguardado en tu bóveda (${doc.fileName}).`;
+      return makeActionResult({
+        reply: `📎 ¡Recibí la foto! La he resguardado en tu bóveda (${doc.fileName}).`,
+        hasDocument: true,
+        documentFile: doc,
+      });
     }
 
     try {
-      const prompt = `Analiza esta imagen con precisión forense. Es una foto de factura o recibo de compra.
-Extrae estrictamente este JSON:
+      // Paso 1: Memoria de Contexto Obligatoria
+      const { recentMessages } = await this._getRecentContext(channel, senderId);
+      const recentContextText = recentMessages.map((m) => `[${m.role}]: ${m.content}`).join('\n');
+
+      // Paso 2: Prompt de Clasificación Multimodal Universal
+      const prompt = `Analiza esta imagen con visión ejecutiva de alto nivel para Sebastián Jiménez.
+
+Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE para entender por qué te envía esta imagen.
+
+HISTORIAL RECIENTE:
+${recentContextText || 'Sin mensajes previos'}
+
+Determina el tipo de imagen y responde estrictamente con este JSON:
 {
-  "isFactura": true,
-  "vendor": "Tienda o proveedor",
-  "item": "Artículo o concepto principal",
-  "total": 52.00,
-  "currency": "GTQ",
-  "purchaseDate": "YYYY-MM-DD",
-  "warrantyMonths": 0,
-  "summary": "Resumen conciso de 2 líneas"
+  "type": "FACTURA_RECIBO" | "CAPTURA_CORREO_O_TEXTO" | "DIAGRAMA_ARQUITECTURA" | "FOTO_GENERAL",
+  "isFactura": true | false,
+  "title": "Título descriptivo breve",
+  "extractedText": "Texto principal legible en la imagen (especialmente si es correo, chat o notificación)",
+  "executiveReply": "Respuesta ejecutiva, cálida y natural de Carmencita a Sebastián respondiendo a lo que se ve en la imagen y al contexto de la conversación (2 a 4 oraciones). Si es un correo, hazle un resumen claro de lo que dice.",
+  "invoiceData": {
+    "vendor": "Nombre del proveedor",
+    "item": "Artículo o servicio",
+    "total": 0.00,
+    "currency": "GTQ" | "USD",
+    "purchaseDate": "YYYY-MM-DD",
+    "warrantyMonths": 0
+  }
 }`;
 
       const response = await this._generateContentWithFailover({
-        contents: [prompt, { inlineData: { mimeType, data: buffer.toString('base64') } }],
+        contents: [prompt, { inlineData: { mimeType: mimeType || 'image/jpeg', data: buffer.toString('base64') } }],
         config: { systemInstruction: this.getSystemPrompt() },
       });
 
@@ -390,34 +426,92 @@ Extrae estrictamente este JSON:
         try { parsed = JSON.parse(jsonMatch[0]); } catch {}
       }
 
+      // Paso 3: Bifurcación Limpia
+      const isFacturaReal = Boolean(parsed.isFactura === true && parsed.type === 'FACTURA_RECIBO');
+
+      if (isFacturaReal) {
+        const invData = parsed.invoiceData || {};
+        const doc = await this.documentService.saveDocument({
+          buffer,
+          originalName: `${parsed.title || invData.item || 'factura'}.jpg`,
+          mimeType: mimeType || 'image/jpeg',
+          category: 'FACTURA',
+          summary: parsed.executiveReply || caption,
+          invoiceData: {
+            vendor: invData.vendor || 'Proveedor Detectado',
+            item: invData.item || caption || 'Artículo',
+            totalAmount: Number(invData.totalAmount ?? invData.total ?? 0),
+            currency: invData.currency || 'GTQ',
+            purchaseDate: invData.purchaseDate || new Date(),
+            warrantyMonths: invData.warrantyMonths || 0,
+            notes: parsed.extractedText || caption,
+          },
+        });
+
+        const inv = doc.invoice;
+        const reply = `✅ **¡Factura clasificada y resguardada en PostgreSQL!**\n\n` +
+          `📦 **Artículo:** ${inv?.item || 'Artículo'} | 🏢 **Proveedor:** ${inv?.vendor || 'Proveedor'}\n` +
+          `💰 **Total:** ${inv?.currency || 'GTQ'} ${inv?.totalAmount} | 🛡️ **Garantía:** ${inv?.warrantyMonths || 0} meses\n` +
+          `📁 **Bóveda ID:** \`${doc.id}\`\n\n${parsed.executiveReply || doc.summary || 'Resguardada para auditoría y reclamo.'}`;
+
+        await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: reply });
+        return makeActionResult({
+          reply,
+          hasDocument: true,
+          documentFile: doc,
+          fullHistoryText: reply,
+        });
+      }
+
+      // Si NO es factura (CAPTURA_CORREO_O_TEXTO, DIAGRAMA_ARQUITECTURA, FOTO_GENERAL)
+      const docCategory = parsed.type === 'DIAGRAMA_ARQUITECTURA' ? 'PROYECTO_BRIEF' : 'GENERAL';
       const doc = await this.documentService.saveDocument({
         buffer,
-        originalName: `${parsed.item || 'factura'}.jpg`,
-        mimeType,
-        category: 'FACTURA',
-        summary: parsed.summary || caption,
-        invoiceData: {
-          vendor: parsed.vendor || 'Proveedor Detectado',
-          item: parsed.item || caption || 'Artículo',
-          totalAmount: parsed.total || 0,
-          currency: parsed.currency || 'GTQ',
-          purchaseDate: parsed.purchaseDate || new Date(),
-          warrantyMonths: parsed.warrantyMonths || 0,
-          notes: parsed.summary || caption,
-        },
+        originalName: `${parsed.title || 'captura'}.jpg`,
+        mimeType: mimeType || 'image/jpeg',
+        category: docCategory,
+        summary: parsed.extractedText || parsed.executiveReply || caption,
+        invoiceData: null,
       });
 
-      const inv = doc.invoice;
-      const reply = `✅ **¡Factura clasificada y resguardada en PostgreSQL!**\n\n` +
-        `📦 **Artículo:** ${inv?.item || 'Artículo'} | 🏢 **Proveedor:** ${inv?.vendor || 'Proveedor'}\n` +
-        `💰 **Total:** ${inv?.currency || 'GTQ'} ${inv?.totalAmount} | 🛡️ **Garantía:** ${inv?.warrantyMonths || 0} meses\n` +
-        `📁 **Bóveda ID:** \`${doc.id}\`\n\n${doc.summary || 'Resguardada para auditoría y reclamo.'}`;
+      const executiveReply = parsed.executiveReply ||
+        `Sebastián querido, ya revisé la imagen que me compartiste (${parsed.title || 'archivo multimedia'}). Quedó resguardada en tu bóveda documental. ¿Deseas que prepare algo más al respecto?`;
 
-      await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: reply });
-      return reply;
+      let voiceFile = null;
+      const wantsVoice = Boolean(
+        caption?.match(/audio|voz|escuchar/i) ||
+        recentMessages.slice(-3).some((m) => m.content?.match(/audio|voz|escuchar|nota de voz/i))
+      );
+
+      if (wantsVoice && this.voiceService && typeof this.voiceService.synthesizeSpeech === 'function') {
+        try {
+          voiceFile = await this.voiceService.synthesizeSpeech(executiveReply);
+        } catch (vErr) {
+          console.warn('[Brain Vision] Error sintetizando voz:', vErr.message);
+        }
+      }
+
+      await this._logMessage({
+        channel,
+        senderId,
+        senderName: 'Carmencita',
+        role: 'assistant',
+        content: executiveReply,
+      });
+
+      return makeActionResult({
+        reply: executiveReply,
+        hasVoice: Boolean(voiceFile),
+        voiceFile,
+        hasDocument: true,
+        documentFile: doc,
+        fullHistoryText: `${executiveReply}\n[Imagen analizada: ${parsed.type || 'GENERAL'}]`,
+      });
     } catch (err) {
       console.error('[Brain] Error processing image:', err);
-      return `Recibí la foto, pero ocurrió un problema al procesarla con visión: ${err.message}`;
+      const errMsg = `Recibí la foto, pero ocurrió un problema al procesarla con visión: ${err.message}`;
+      await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: errMsg });
+      return makeActionResult({ reply: errMsg });
     }
   }
 
@@ -530,7 +624,13 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
       });
 
       const replyText = response.text || 'He escuchado tu nota de voz, Sebastián.';
-      const actionResult = await this._executeExtractedActions(replyText, onProgress);
+      const actionResult = await this._executeExtractedActions(replyText, onProgress, {
+        userText: 'nota de voz recibida',
+        isAudio: true,
+        channel,
+        senderId,
+        senderName,
+      });
 
       if (!actionResult.hasVoice && this.voiceService) {
         try {
@@ -591,7 +691,7 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
     return null;
   }
 
-  async _executeExtractedActions(rawText, onProgress = null) {
+  async _executeExtractedActions(rawText, onProgress = null, context = {}) {
     let cleanText = rawText;
     const extracted = this._extractActionJson(rawText);
     if (!extracted) {
@@ -783,16 +883,37 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
 
     if (parsedAction.action === 'CHECK_GMAIL') {
       const maxResults = parsedAction.maxResults || 5;
-      const onlyImportant = parsedAction.onlyImportant !== false;
+      const isSpecificQuery = Boolean(parsedAction.query && parsedAction.query.trim());
+      const onlyImportant = isSpecificQuery ? (parsedAction.onlyImportant === true) : true;
       let emails = [];
       let emailError = null;
+      let emailDetail = null;
+
       if (this.gmailService) {
         try {
-          emails = await this.gmailService.getUnreadInboxMessages({
-            maxResults,
-            query: parsedAction.query,
-            onlyImportant,
-          });
+          if (typeof this.gmailService.searchEmails === 'function') {
+            emails = await this.gmailService.searchEmails({
+              query: parsedAction.query || '',
+              maxResults,
+              onlyImportant,
+              includeRead: isSpecificQuery,
+            });
+          } else {
+            emails = await this.gmailService.getUnreadInboxMessages({
+              maxResults,
+              query: parsedAction.query,
+              onlyImportant,
+            });
+          }
+
+          const specificQuery = (parsedAction.query || '').trim();
+          if (specificQuery && emails.length > 0 && typeof this.gmailService.getEmailDetails === 'function') {
+            try {
+              emailDetail = await this.gmailService.getEmailDetails({ messageId: emails[0].id });
+            } catch (detErr) {
+              console.warn('[Brain Gmail] No se pudo obtener detalle del correo:', detErr.message);
+            }
+          }
         } catch (err) {
           console.error('[Brain] Error consultando Gmail:', err.message);
           emailError = err.message;
@@ -806,6 +927,14 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         emailReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude consultar tu bandeja de Gmail: ${emailError}`;
       } else if (emails.length === 0) {
         emailReply = `${cleanText ? cleanText + '\n\n' : ''}✉️ <b>Bandeja de Gmail:</b>\n\n• ¡Bandeja limpia! No tienes correos pendientes sin leer.`;
+      } else if (emailDetail) {
+        const fromClean = emailDetail.from ? emailDetail.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+        const bodySnippet = emailDetail.bodyText
+          ? emailDetail.bodyText.slice(0, 500).replace(/\s+/g, ' ')
+          : (emailDetail.snippet || '');
+        emailReply = `Sebastián querido, aquí tengo el correo de ${fromClean} con asunto "${emailDetail.subject}":\n\n` +
+          `📌 <b>Resumen Ejecutivo:</b>\n${bodySnippet}${emailDetail.bodyText && emailDetail.bodyText.length > 500 ? '...' : ''}\n\n` +
+          `¿Deseas que prepare una respuesta o realice alguna acción con este correo?`;
       } else {
         const list = emails.map((em, i) => {
           const fromClean = em.from ? em.from.replace(/<[^>]+>/, '').trim() : 'Desconocido';
@@ -815,12 +944,27 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         emailReply = `${cleanText ? cleanText + '\n\n' : ''}✉️ <b>Bandeja de Gmail (${emails.length} correo${emails.length === 1 ? '' : 's'} pendiente${emails.length === 1 ? '' : 's'}):</b>\n\n${list}`;
       }
 
+      let voiceFile = null;
+      const wantsVoice = Boolean(
+        context?.isAudio ||
+        (context?.userText && /audio|voz|escuchar|nota de voz|resumen en audio/i.test(context.userText))
+      );
+      if (wantsVoice && this.voiceService && typeof this.voiceService.synthesizeSpeech === 'function') {
+        try {
+          voiceFile = await this.voiceService.synthesizeSpeech(emailReply);
+        } catch (vErr) {
+          console.warn('[Brain Gmail Voice] Error sintetizando audio:', vErr.message);
+        }
+      }
+
       return makeActionResult({
         reply: emailReply,
         actionData: parsedAction,
         gmailEmails: emails,
         hasGmailEmails: emails.length > 0,
-        fullHistoryText: `${cleanText}\n[Bandeja de Gmail consultada: ${emails.length} correos pendientes]`,
+        hasVoice: Boolean(voiceFile),
+        voiceFile,
+        fullHistoryText: `${emailReply}\n[Bandeja de Gmail consultada: ${emails.length} correos pendientes]`,
       });
     }
 

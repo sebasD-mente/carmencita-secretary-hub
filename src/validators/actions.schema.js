@@ -167,9 +167,9 @@ export const SearchObsidianNotesActionSchema = z.object({
 
 export const CheckGmailActionSchema = z.object({
   action: z.literal('CHECK_GMAIL'),
-  query: z.string().optional().default('is:unread label:INBOX category:primary -category:social -category:promotions -category:forums'),
+  query: z.string().optional().default(''), // Vacío por omisión para delegar la lógica al servicio
   maxResults: z.number().optional().default(5),
-  onlyImportant: z.boolean().optional().default(true),
+  onlyImportant: z.boolean().optional().default(false), // Default false para no filtrar búsquedas deliberadas
 });
 
 export const GenerateQrActionSchema = z.object({

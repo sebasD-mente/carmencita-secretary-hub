@@ -2155,8 +2155,8 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(parsedDefaultAction, 'CHECK_GMAIL por defecto debe ser validado por Zod');
     assert.equal(parsedDefaultAction.action, 'CHECK_GMAIL');
     assert.equal(parsedDefaultAction.maxResults, 5);
-    assert.equal(parsedDefaultAction.onlyImportant, true);
-    assert.equal(parsedDefaultAction.query, DEFAULT_GMAIL_QUERY);
+    assert.equal(parsedDefaultAction.onlyImportant, false);
+    assert.equal(parsedDefaultAction.query, '');
 
     // 0b. Heurística Anti-Ruido y Publicidad: isPromotionalOrNoise
     assert.equal(isPromotionalOrNoise({ from: 'notifications@linkedin.com', subject: 'Tienes 5 nuevas invitaciones' }), true);
@@ -3128,6 +3128,204 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       config.telegram.token = origToken;
       config.telegram.allowedUsers = origAllowed;
     }
+  });
+
+  await t.test('38. Visión Multimodal Contextual Universal (Cero Facturas Falsas), Motor de Búsqueda y Lectura en Gmail y Despacho de Voz', async () => {
+    // 1. GmailService.searchEmails con correos leídos y categorías no primarias (ej. CATEGORY_UPDATES)
+    const mockEmailDetailUpdates = {
+      id: 'msg_ai_studio',
+      threadId: 'thread_ai_studio',
+      snippet: 'Action Required: Update thinking_budget and sampling parameters in Google AI Studio...',
+      labelIds: ['INBOX', 'CATEGORY_UPDATES'],
+      payload: {
+        headers: [
+          { name: 'From', value: 'Google AI Studio <googleai-noreply@google.com>' },
+          { name: 'Subject', value: '[Action Required] Update thinking_budget and sampling parameters' },
+          { name: 'Date', value: 'Wed, 30 Sep 2026 18:20:00 -0600' },
+        ],
+        mimeType: 'text/plain',
+        body: {
+          data: Buffer.from('Hola Sebastián,\n\nTe informamos que debes actualizar los parámetros de thinking_budget y sampling en tus prompts de Gemini.\n\nSaludos,\nEquipo de Google AI Studio.').toString('base64url'),
+        },
+      },
+    };
+
+    let capturedListQuery = null;
+    const mockGmailDeepClient = {
+      users: {
+        messages: {
+          list: async ({ q, maxResults }) => {
+            capturedListQuery = q;
+            if (q && q.includes('Google AI Studio')) {
+              return { data: { messages: [{ id: 'msg_ai_studio', threadId: 'thread_ai_studio' }] } };
+            }
+            return { data: { messages: [] } };
+          },
+          get: async ({ id, format }) => {
+            assert.equal(id, 'msg_ai_studio');
+            return { data: mockEmailDetailUpdates };
+          },
+        },
+      },
+    };
+
+    const gmailDeepService = new GmailService({ gmailClient: mockGmailDeepClient });
+    const foundEmails = await gmailDeepService.searchEmails({
+      query: 'Google AI Studio',
+      maxResults: 5,
+      includeRead: true,
+    });
+
+    assert.equal(foundEmails.length, 1);
+    assert.equal(foundEmails[0].id, 'msg_ai_studio');
+    assert.equal(foundEmails[0].from, 'Google AI Studio <googleai-noreply@google.com>');
+    assert.equal(foundEmails[0].subject, '[Action Required] Update thinking_budget and sampling parameters');
+    assert.equal(capturedListQuery, 'Google AI Studio', 'No debe forzar is:unread ni category:primary al buscar por remitente o tema');
+
+    // 2. GmailService.getEmailDetails con decodificación de cuerpo de mensaje
+    const emailDetails = await gmailDeepService.getEmailDetails({ messageId: 'msg_ai_studio' });
+    assert.ok(emailDetails);
+    assert.equal(emailDetails.id, 'msg_ai_studio');
+    assert.equal(emailDetails.subject, '[Action Required] Update thinking_budget and sampling parameters');
+    assert.ok(emailDetails.bodyText.includes('thinking_budget y sampling'));
+    assert.ok(emailDetails.bodyText.includes('Google AI Studio'));
+
+    // 3. CarmencitaBrain.processImage: Captura de pantalla de correo NO debe generar factura de GTQ 0
+    const initialInvoiceCount = mockPrisma._data.invoices.length;
+
+    const mockAiImageScreenshot = {
+      models: {
+        generateContent: async () => ({
+          text: JSON.stringify({
+            type: 'CAPTURA_CORREO_O_TEXTO',
+            isFactura: false,
+            title: 'Notificación de Google AI Studio',
+            extractedText: 'Action Required: Update thinking_budget and sampling parameters',
+            executiveReply: 'Sebastián querido, la imagen que me compartiste es una notificación de Google AI Studio sobre actualizar el parámetro thinking_budget. Ya quedó en tu bóveda para referencia técnica.',
+            invoiceData: null,
+          }),
+        }),
+      },
+    };
+
+    const mockVoiceSynthesis = {
+      synthesizeSpeech: async (text) => ({
+        buffer: Buffer.from('FAKE_SYNTHESIZED_VOICE_OGG'),
+        fileName: 'carmencita_voice.ogg',
+        mimeType: 'audio/ogg',
+      }),
+    };
+
+    const brainVision = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiImageScreenshot,
+      gmailService: gmailDeepService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      voiceService: mockVoiceSynthesis,
+    });
+
+    const screenshotResult = await brainVision.processImage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      buffer: Buffer.from('FAKE_PNG_SCREENSHOT'),
+      mimeType: 'image/png',
+      caption: 'Carmencita, mándame un audio explicándome esto',
+    });
+
+    // Validaciones inquebrantables de la regla "Cero Facturas Falsas":
+    assert.equal(mockPrisma._data.invoices.length, initialInvoiceCount, 'Una captura de pantalla NUNCA debe insertar un registro en la tabla Invoice');
+    assert.equal(screenshotResult.reply.includes('Total: GTQ 0'), false, 'NUNCA debe reportar "Total: GTQ 0" en capturas de pantalla');
+    assert.equal(screenshotResult.reply.includes('¡Factura clasificada y resguardada'), false);
+    assert.ok(screenshotResult.reply.includes('Google AI Studio'));
+    assert.equal(screenshotResult.hasDocument, true);
+    assert.equal(screenshotResult.hasVoice, true, 'Debe sintetizar voz si se solicitó audio en el caption');
+    assert.ok(screenshotResult.voiceFile);
+
+    // 4. CarmencitaBrain.processImage: Factura Real SÍ debe registrarse en Invoice con sus datos reales
+    const mockAiRealInvoice = {
+      models: {
+        generateContent: async () => ({
+          text: JSON.stringify({
+            type: 'FACTURA_RECIBO',
+            isFactura: true,
+            title: 'Factura Pintura y Acabados',
+            extractedText: 'Comercial El Volcán - Factura #9812 - Total: GTQ 850.00',
+            executiveReply: 'Factura resguardada en bóveda con garantía de 6 meses.',
+            invoiceData: {
+              vendor: 'Comercial El Volcán',
+              item: 'Pintura y sellador para stands',
+              totalAmount: 850,
+              currency: 'GTQ',
+              warrantyMonths: 6,
+            },
+          }),
+        }),
+      },
+    };
+
+    const brainInvoice = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiRealInvoice,
+      gmailService: gmailDeepService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      voiceService: mockVoiceSynthesis,
+    });
+
+    const invoiceResult = await brainInvoice.processImage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      buffer: Buffer.from('FAKE_INVOICE_PNG'),
+      mimeType: 'image/png',
+      caption: 'Factura de pintura',
+    });
+
+    assert.equal(mockPrisma._data.invoices.length, initialInvoiceCount + 1, 'Una factura real SÍ debe registrarse en la tabla Invoice');
+    const createdInvoice = mockPrisma._data.invoices[0];
+    assert.equal(createdInvoice.vendor, 'Comercial El Volcán');
+    assert.equal(createdInvoice.totalAmount, 850);
+    assert.ok(invoiceResult.reply.includes('¡Factura clasificada y resguardada en PostgreSQL!'));
+    assert.ok(invoiceResult.reply.includes('GTQ 850'));
+
+    // 5. Búsqueda y lectura de correo específica en CarmencitaBrain (CHECK_GMAIL con resumen ejecutivo y audio)
+    const mockAiGmailQuery = {
+      models: {
+        generateContent: async () => ({
+          text: '```json\n{"action": "CHECK_GMAIL", "query": "Google AI Studio", "maxResults": 5}\n```',
+        }),
+      },
+    };
+
+    const brainGmailSearch = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiGmailQuery,
+      gmailService: gmailDeepService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+      voiceService: mockVoiceSynthesis,
+    });
+
+    const gmailSearchResult = await brainGmailSearch.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, quiero que me mandes un resumen en audio del correo de Google AI Studio',
+    });
+
+    assert.equal(gmailSearchResult.hasGmailEmails, true);
+    assert.ok(gmailSearchResult.reply.includes('Google AI Studio'));
+    assert.ok(gmailSearchResult.reply.includes('thinking_budget'));
+    assert.equal(gmailSearchResult.hasVoice, true, 'Debe generar nota de voz cuando el usuario pide resumen en audio');
+    assert.ok(gmailSearchResult.voiceFile);
   });
 
   // Limpieza final

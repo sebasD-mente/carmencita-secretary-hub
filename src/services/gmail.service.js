@@ -39,6 +39,54 @@ export function isPromotionalOrNoise({ from = '', subject = '', snippet = '', ha
   return false;
 }
 
+export function extractBodyFromPayload(payload) {
+  if (!payload) return '';
+  let textPlain = '';
+  let textHtml = '';
+
+  function traverse(part) {
+    if (!part) return;
+    if (part.mimeType === 'text/plain' && part.body?.data) {
+      try {
+        const decoded = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        textPlain += (textPlain ? '\n' : '') + decoded;
+      } catch {}
+    } else if (part.mimeType === 'text/html' && part.body?.data) {
+      try {
+        const decoded = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        textHtml += (textHtml ? '\n' : '') + decoded;
+      } catch {}
+    }
+
+    if (Array.isArray(part.parts)) {
+      for (const childPart of part.parts) {
+        traverse(childPart);
+      }
+    }
+  }
+
+  traverse(payload);
+
+  if (textPlain.trim()) {
+    return textPlain.trim();
+  }
+
+  if (textHtml.trim()) {
+    return textHtml
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  return '';
+}
+
 export class GmailService {
   constructor(opts = {}) {
     this.clientId = opts.clientId ?? config.google?.clientId ?? '';
@@ -65,6 +113,133 @@ export class GmailService {
       console.warn('[GmailService] Google Gmail API no disponible o googleapis ausente:', err.message);
       return null;
     }
+  }
+
+  /**
+   * Búsqueda flexible de correos (incluye leídos y no leídos si hay query específico)
+   * @param {Object} options
+   * @param {string} [options.query='']
+   * @param {number} [options.maxResults=5]
+   * @param {boolean} [options.onlyImportant=false]
+   * @param {boolean} [options.includeRead=true]
+   * @returns {Promise<Array<{id: string, threadId: string, from: string, subject: string, date: string, snippet: string}>>}
+   */
+  async searchEmails({
+    query = '',
+    maxResults = 5,
+    onlyImportant = false,
+    includeRead = true,
+  } = {}) {
+    const gmail = await this._getGmailClient();
+    if (!gmail) return [];
+
+    try {
+      const cleanQuery = (query || '').trim();
+      const hasSpecificQuery = cleanQuery.length > 0;
+
+      let q = '';
+      if (hasSpecificQuery) {
+        q = cleanQuery;
+      } else {
+        q = includeRead
+          ? 'label:INBOX -category:social -category:promotions -category:forums'
+          : 'label:INBOX is:unread -category:social -category:promotions -category:forums';
+      }
+
+      const fetchLimit = (!hasSpecificQuery && onlyImportant) ? Math.max(maxResults * 3, 15) : maxResults;
+
+      const listRes = await gmail.users.messages.list({
+        userId: 'me',
+        q,
+        maxResults: fetchLimit,
+      });
+
+      const messages = listRes.data?.messages || [];
+      if (messages.length === 0) return [];
+
+      const candidateMessages = await Promise.all(
+        messages.map(async (msg) => {
+          try {
+            const detail = await gmail.users.messages.get({
+              userId: 'me',
+              id: msg.id,
+              format: 'metadata',
+              metadataHeaders: ['From', 'Subject', 'Date', 'List-Unsubscribe'],
+            });
+            const headers = detail.data?.payload?.headers || [];
+            const getHeader = (name) =>
+              headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+            const from = getHeader('From');
+            const subject = getHeader('Subject') || '(Sin Asunto)';
+            const date = getHeader('Date');
+            const snippet = detail.data?.snippet || '';
+            const hasUnsubscribe = Boolean(getHeader('List-Unsubscribe'));
+
+            // Si es búsqueda específica por término/remitente, NO descartar con isPromotionalOrNoise
+            if (!hasSpecificQuery && onlyImportant && isPromotionalOrNoise({ from, subject, snippet, hasUnsubscribe })) {
+              return null;
+            }
+
+            return {
+              id: msg.id,
+              threadId: msg.threadId,
+              from,
+              subject,
+              date,
+              snippet,
+            };
+          } catch (err) {
+            console.warn(`[GmailService] Error obteniendo metadata de correo ${msg.id}:`, err.message);
+            return null;
+          }
+        })
+      );
+
+      const filtered = candidateMessages.filter(Boolean);
+      return filtered.slice(0, maxResults);
+    } catch (err) {
+      console.error('[GmailService] Error consultando mensajes en searchEmails:', err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Obtiene los detalles completos de un correo específico, decodificando el cuerpo en base64url
+   * @param {Object} options
+   * @param {string} options.messageId
+   */
+  async getEmailDetails({ messageId }) {
+    if (!messageId) throw new Error('messageId es obligatorio');
+    const gmail = await this._getGmailClient();
+    if (!gmail) throw new Error('Gmail API no configurado');
+
+    const detail = await gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+
+    const headers = detail.data?.payload?.headers || [];
+    const getHeader = (name) =>
+      headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+    const from = getHeader('From');
+    const subject = getHeader('Subject') || '(Sin Asunto)';
+    const date = getHeader('Date');
+    const snippet = detail.data?.snippet || '';
+    const extractedBodyText = extractBodyFromPayload(detail.data?.payload) || snippet;
+
+    return {
+      id: detail.data?.id,
+      threadId: detail.data?.threadId,
+      from,
+      subject,
+      date,
+      snippet,
+      bodyText: extractedBodyText.slice(0, 4000),
+      labels: detail.data?.labelIds || [],
+    };
   }
 
   /**

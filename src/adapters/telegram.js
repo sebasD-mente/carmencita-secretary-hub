@@ -323,7 +323,7 @@ export class TelegramAdapter {
       }
     });
 
-    // 2. FOTOS (FACTURAS / RECIBOS)
+    // 2. FOTOS Y MULTIMODALIDAD (FACTURAS, CAPTURAS, DIAGRAMAS, GENERAL)
     this.bot.on('message:photo', async (ctx) => {
       const senderId = ctx.from.id;
       const senderName = ctx.from.first_name || 'Sebastián';
@@ -348,7 +348,14 @@ export class TelegramAdapter {
         caption,
       });
 
-      await this._safeReply(ctx, reply);
+      if (reply?.hasVoice && reply?.voiceFile) {
+        await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+        if (reply?.reply) {
+          await this._safeReply(ctx, reply.reply);
+        }
+      } else {
+        await this._safeReply(ctx, reply?.reply || reply);
+      }
     });
 
     // 3. DOCUMENTOS UNIVERSALES (PDF, EXCEL, CONTRATOS, COTIZACIONES)
