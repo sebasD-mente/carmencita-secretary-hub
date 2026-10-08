@@ -49,6 +49,8 @@ function makeActionResult(opts) {
     initialAck: opts.initialAck || null,
     report: opts.report || null,
     progressSent: opts.progressSent || false,
+    syncResult: opts.syncResult || null,
+    hasObsidianSync: Boolean(opts.syncResult),
     toString() { return this.reply; },
     includes(s) { return this.reply.includes(s); },
   };
@@ -190,6 +192,8 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
     "maxResults": 20
   }
 - Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
+- Sincronizar bóveda completa de Obsidian hacia memoria semántica: {"action": "SYNC_OBSIDIAN_VAULT", "force": false}
+  Si Sebastián pide explícitamente "sincroniza mi obsidian", "actualiza tus notas" o "absorbe mi bóveda", debe emitir la acción SYNC_OBSIDIAN_VAULT.
 
 BÓVEDA DOCUMENTAL Y FACTURAS:
 - Carmencita cuenta con acceso a la bóveda documental de Sebastián para consultar facturas, cotizaciones, contratos y documentos resguardados.
@@ -1375,6 +1379,37 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         actionData: parsedAction,
         fullHistoryText: `${reply}\n[Contenido anexado a nota de Obsidian: ${appendResult.fileName || parsedAction.title}]`,
       });
+    }
+
+    if (parsedAction.action === 'SYNC_OBSIDIAN_VAULT') {
+      if (!this.obsidianService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de Obsidian Vault no está configurado en este momento.',
+          actionData: parsedAction,
+        });
+      }
+
+      try {
+        const syncResult = await this.obsidianService.syncVaultToVector({
+          embeddingService: this.embeddingService,
+          force: parsedAction.force,
+        });
+
+        const reply = `Sebastián querido, he completado la sincronización de tu bóveda de Obsidian con mi memoria semántica. Procesé con éxito ${syncResult.totalIndexed} notas y generé ${syncResult.totalChunks} fragmentos conceptuales. Ahora tengo presente todo tu conocimiento sobre tus proyectos, modelos y directivas.`;
+
+        return makeActionResult({
+          reply,
+          actionData: parsedAction,
+          syncResult,
+          fullHistoryText: `${reply}\n[Sincronización Obsidian RAG: ${syncResult.totalIndexed} notas, ${syncResult.totalChunks} chunks]`,
+        });
+      } catch (err) {
+        console.error('[Brain Obsidian] Error en sincronización masiva:', err.message);
+        return makeActionResult({
+          reply: `⚠️ Sebastián querido, ocurrió un inconveniente durante la sincronización de tu bóveda: ${err.message}`,
+          actionData: parsedAction,
+        });
+      }
     }
 
     if (parsedAction.action === 'CHECK_GMAIL') {

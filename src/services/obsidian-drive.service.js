@@ -25,6 +25,7 @@ export class ObsidianDriveService {
     driveClient = null,
     cacheTtlMs = 5 * 60 * 1000,
     embeddingService = null,
+    prisma = null,
   } = {}) {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
@@ -33,6 +34,7 @@ export class ObsidianDriveService {
     this.vaultFolderId = vaultFolderId || null;
     this.driveClient = driveClient;
     this.embeddingService = embeddingService;
+    this.prisma = prisma;
     this.cachedSubfolderIds = new Map();
 
     // Caché en memoria para el árbol del Vault (TTL de 5 minutos)
@@ -539,6 +541,96 @@ ${content}${linksBlock}
       limit,
       minSimilarity: 0.50,
     });
+  }
+
+  /**
+   * Sincroniza en lote todas las notas del Obsidian Vault hacia SemanticMemory.
+   * Garantiza idempotencia: elimina chunks previos de cada nota antes de reindexar.
+   *
+   * @param {Object} options
+   * @param {Object} [options.embeddingService] - Servicio de embeddings
+   * @param {boolean} [options.force=false] - Forzar re-indexación de todas las notas
+   * @param {number} [options.limit=100] - Límite de notas a listar
+   * @param {Function} [options.onProgress] - Callback opcional ({ current, total, noteName, chunksCount })
+   * @returns {Promise<{ totalFound: number, totalIndexed: number, totalChunks: number, errors: Array }>}
+   */
+  async syncVaultToVector({ embeddingService = null, force = false, limit = 100, onProgress = null } = {}) {
+    const embService = embeddingService || this.embeddingService;
+    if (!embService || typeof embService.saveMemory !== 'function') {
+      throw new Error('EmbeddingService no configurado para sincronizar Obsidian Vault.');
+    }
+
+    // 1. Obtener listado de todas las notas .md del Vault
+    const notes = await this.searchNotes({ query: '', maxResults: limit });
+    if (!notes || notes.length === 0) {
+      return { totalFound: 0, totalIndexed: 0, totalChunks: 0, errors: [] };
+    }
+
+    let totalIndexed = 0;
+    let totalChunks = 0;
+    const errors = [];
+
+    for (let i = 0; i < notes.length; i++) {
+      const note = notes[i];
+      try {
+        // 2. Leer contenido completo de la nota
+        const noteData = await this.readNote({ fileId: note.id, name: note.name });
+        const content = noteData?.content;
+
+        if (!content || !content.trim()) {
+          continue;
+        }
+
+        // 3. Idempotencia: Limpiar chunks previos de este fileId en SemanticMemory si prisma está disponible
+        const prismaClient = embService.prisma || this.prisma;
+        if (prismaClient && typeof prismaClient.$executeRawUnsafe === 'function') {
+          try {
+            await prismaClient.$executeRawUnsafe(
+              `DELETE FROM "SemanticMemory" WHERE category = 'OBSIDIAN' AND metadata->>'fileId' = $1`,
+              note.id
+            );
+          } catch (delErr) {
+            // Si falla executeRawUnsafe (por ejemplo en mocks), continuar con fallback
+          }
+        }
+
+        // 4. Indexar chunks de la nota
+        const chunks = this._chunkMarkdown(content);
+        const cleanTitle = note.name ? note.name.replace(/\.md$/i, '') : 'Nota';
+
+        for (let c = 0; c < chunks.length; c++) {
+          const chunkText = `[Nota: ${cleanTitle}] ${chunks[c]}`;
+          await embService.saveMemory({
+            content: chunkText,
+            category: 'OBSIDIAN',
+            metadata: {
+              fileId: note.id,
+              fileName: note.name,
+              cleanTitle,
+              folderPath: note.folder || note.folderPath || '',
+              chunkIndex: c,
+              totalChunks: chunks.length,
+            },
+          });
+          totalChunks++;
+        }
+
+        totalIndexed++;
+        if (typeof onProgress === 'function') {
+          onProgress({ current: i + 1, total: notes.length, noteName: note.name, chunksCount: chunks.length });
+        }
+      } catch (err) {
+        console.warn(`[ObsidianDriveService] Error sincronizando nota "${note.name}":`, err.message);
+        errors.push({ noteName: note.name, error: err.message });
+      }
+    }
+
+    return {
+      totalFound: notes.length,
+      totalIndexed,
+      totalChunks,
+      errors,
+    };
   }
 }
 

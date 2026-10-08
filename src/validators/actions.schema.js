@@ -244,6 +244,11 @@ export const SearchDocumentsActionSchema = z.object({
   limit: z.number().optional().default(5),
 });
 
+export const SyncObsidianVaultActionSchema = z.object({
+  action: z.literal('SYNC_OBSIDIAN_VAULT'),
+  force: z.boolean().optional().default(false),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -268,6 +273,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RescheduleCalendarEventActionSchema,
   CancelCalendarEventActionSchema,
   SearchDocumentsActionSchema,
+  SyncObsidianVaultActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

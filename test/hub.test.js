@@ -43,6 +43,7 @@ import {
   RescheduleCalendarEventActionSchema,
   CancelCalendarEventActionSchema,
   SearchDocumentsActionSchema,
+  SyncObsidianVaultActionSchema,
   parseCarmencitaAction,
 } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
@@ -325,6 +326,16 @@ class MockPrismaClient {
   }
 
   async $executeRawUnsafe(query, ...params) {
+    if (query.includes('DELETE FROM "SemanticMemory"')) {
+      const fileId = params[0];
+      const initialLen = this._data.semanticMemories.length;
+      this._data.semanticMemories = this._data.semanticMemories.filter((m) => {
+        if (m.category !== 'OBSIDIAN') return true;
+        if (!fileId) return false;
+        return m.metadata?.fileId !== fileId;
+      });
+      return initialLen - this._data.semanticMemories.length;
+    }
     if (query.includes('INSERT INTO "SemanticMemory"')) {
       const category = params[0] || 'GENERAL';
       const content = params[1] || '';
@@ -4365,6 +4376,223 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(conceptualResult.actionData.action, 'SEARCH_OBSIDIAN_NOTES');
     assert.ok(conceptualResult.reply.includes('Stand Feria 2026'), 'Debe citar la nota fuente');
     assert.ok(conceptualResult.reply.includes('madera de pino') || conceptualResult.reply.includes('bastidores'), 'Debe sintetizar la respuesta conceptual');
+  });
+
+  await t.test('48. Sincronización Masiva e Idempotente del Vault (syncVaultToVector)', async () => {
+    // 0. Validación de Esquema Zod SyncObsidianVaultActionSchema
+    const parsedValid = SyncObsidianVaultActionSchema.parse({ action: 'SYNC_OBSIDIAN_VAULT', force: true });
+    assert.equal(parsedValid.action, 'SYNC_OBSIDIAN_VAULT');
+    assert.equal(parsedValid.force, true);
+
+    const parsedDefault = parseCarmencitaAction({ action: 'SYNC_OBSIDIAN_VAULT' });
+    assert.equal(parsedDefault.action, 'SYNC_OBSIDIAN_VAULT');
+    assert.equal(parsedDefault.force, false);
+
+    // 1. Mock de EmbeddingService
+    const vecVault = Array.from({ length: 768 }, (_, i) => (i < 40 ? 1 : 0));
+    const mockAiVault = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecVault } }),
+      },
+    };
+    const vaultEmbSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAiVault });
+
+    // 2. ObsidianDriveService con notas simuladas
+    const mockNotes = [
+      {
+        id: 'file_deko_1',
+        name: 'STAND IA - Vision General.md',
+        folderPath: '02_Projects',
+        modifiedTime: '2026-10-06T10:00:00Z',
+      },
+      {
+        id: 'file_deko_2',
+        name: 'Deco Vintage Tienda de Posters.md',
+        folderPath: '03_Areas',
+        modifiedTime: '2026-10-06T11:00:00Z',
+      },
+    ];
+
+    const noteContents = {
+      file_deko_1: `# STAND IA - Visión General\n\nSistema integral de visión artificial y recomendación de stands.\n\nIntegración con Gemini 3.8 Flash y Dokploy.`,
+      file_deko_2: `# Deco Vintage Tienda de Posters\n\nTienda online especializada en marcos y pósters decorativos de alta gama.`,
+    };
+
+    const obsidianService = new ObsidianDriveService({
+      embeddingService: vaultEmbSvc,
+      prisma: mockPrisma,
+    });
+
+    obsidianService.searchNotes = async ({ query = '', maxResults = 100 } = {}) => {
+      return mockNotes;
+    };
+
+    obsidianService.readNote = async ({ fileId, name }) => {
+      const content = noteContents[fileId] || '# Nota\n\nContenido';
+      return { fileId, name, content };
+    };
+
+    // 3. Ejecutar syncVaultToVector
+    const progressLog = [];
+    const syncResult = await obsidianService.syncVaultToVector({
+      embeddingService: vaultEmbSvc,
+      onProgress: (p) => progressLog.push(p),
+    });
+
+    assert.equal(syncResult.totalFound, 2);
+    assert.equal(syncResult.totalIndexed, 2);
+    assert.ok(syncResult.totalChunks >= 2, 'Debe haber generado al menos 2 fragmentos conceptuales');
+    assert.equal(syncResult.errors.length, 0);
+    assert.equal(progressLog.length, 2, 'El callback onProgress debe llamarse para cada nota');
+
+    // Verificar en SemanticMemory que los chunks tengan categoría OBSIDIAN y metadatos correctos
+    const obsidianChunks = mockPrisma._data.semanticMemories.filter((m) => m.category === 'OBSIDIAN');
+    assert.ok(obsidianChunks.some((c) => c.metadata?.fileId === 'file_deko_1'));
+    assert.ok(obsidianChunks.some((c) => c.metadata?.fileId === 'file_deko_2'));
+    assert.ok(obsidianChunks.some((c) => c.content.includes('[Nota: STAND IA - Vision General]')));
+    assert.ok(obsidianChunks.some((c) => c.content.includes('[Nota: Deco Vintage Tienda de Posters]')));
+
+    const chunkCountAfterFirstSync = mockPrisma._data.semanticMemories.filter((m) => m.category === 'OBSIDIAN').length;
+
+    // 4. Validar Idempotencia: re-ejecutar syncVaultToVector no debe duplicar chunks
+    const secondSyncResult = await obsidianService.syncVaultToVector({
+      embeddingService: vaultEmbSvc,
+    });
+
+    assert.equal(secondSyncResult.totalFound, 2);
+    assert.equal(secondSyncResult.totalIndexed, 2);
+    assert.equal(secondSyncResult.totalChunks, syncResult.totalChunks);
+
+    const chunkCountAfterSecondSync = mockPrisma._data.semanticMemories.filter((m) => m.category === 'OBSIDIAN').length;
+    assert.equal(
+      chunkCountAfterSecondSync,
+      chunkCountAfterFirstSync,
+      'La re-sincronización debe ser 100% idempotente (cero chunks duplicados)'
+    );
+  });
+
+  await t.test('49. Acción Agéntica SYNC_OBSIDIAN_VAULT en CarmencitaBrain y Endpoint /api/obsidian/sync-rag', async () => {
+    const vecVault = Array.from({ length: 768 }, (_, i) => (i < 40 ? 1 : 0));
+    const mockAiVault = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecVault } }),
+      },
+    };
+    const vaultEmbSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAiVault });
+
+    const mockNotes = [
+      { id: 'f_sync_1', name: 'Arquitectura Jarvis.md', folderPath: '02_Projects' },
+      { id: 'f_sync_2', name: 'Directivas Deko Labs.md', folderPath: '00_Meta' },
+    ];
+    const noteContents = {
+      f_sync_1: `# Arquitectura Jarvis\n\nOrquestador central de agentes para el ecosistema Deko Labs.`,
+      f_sync_2: `# Directivas Deko Labs\n\nEstándares inquebrantables de ingeniería, calidad y verificación forense.`,
+    };
+
+    const obsidianService = new ObsidianDriveService({
+      embeddingService: vaultEmbSvc,
+      prisma: mockPrisma,
+    });
+    obsidianService.searchNotes = async () => mockNotes;
+    obsidianService.readNote = async ({ fileId, name }) => ({
+      fileId,
+      name,
+      content: noteContents[fileId] || '# Nota',
+    });
+
+    // 1. Integración en CarmencitaBrain mediante acción SYNC_OBSIDIAN_VAULT
+    const mockAiBrainSync = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Por supuesto, mi Sebastián adorado! Procedo a sincronizar e indexar todas las notas de tu bóveda de Obsidian en mi memoria semántica.\n```json\n' +
+            JSON.stringify({
+              action: 'SYNC_OBSIDIAN_VAULT',
+              force: false,
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brainSync = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiBrainSync,
+      obsidianService,
+      embeddingService: vaultEmbSvc,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const syncResponse = await brainSync.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, por favor sincroniza mi bóveda de Obsidian',
+    });
+
+    assert.equal(syncResponse.actionData.action, 'SYNC_OBSIDIAN_VAULT');
+    assert.ok(syncResponse.syncResult, 'Debe incluir syncResult en el resultado');
+    assert.equal(syncResponse.syncResult.totalIndexed, 2);
+    assert.ok(syncResponse.syncResult.totalChunks >= 2);
+    assert.ok(syncResponse.reply.includes('Sebastián querido'));
+    assert.ok(syncResponse.reply.includes('sincronización de tu bóveda de Obsidian'));
+    assert.ok(syncResponse.reply.includes('2 notas'));
+    assert.ok(syncResponse.reply.includes('fragmentos conceptuales'));
+
+    // 2. Verificación de Resiliencia: si obsidianService no está configurado
+    const brainNoObsidian = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiBrainSync,
+      obsidianService: null,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+    const noObsResponse = await brainNoObsidian.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'sincroniza mi obsidian',
+    });
+    assert.ok(noObsResponse.reply.includes('servicio de Obsidian Vault no está configurado'));
+
+    // 3. Endpoint Administrativo Fastify /api/obsidian/sync-rag
+    const app = Fastify();
+    registerRoutes(app, {
+      brain: brainSync,
+      documentService,
+      taskService,
+      ideaService,
+      telegramAdapter: null,
+      whatsappAdapter: null,
+    });
+
+    // Sin autorización -> 401
+    const unauthRes = await app.inject({
+      method: 'POST',
+      url: '/api/obsidian/sync-rag',
+      payload: { force: true },
+    });
+    assert.equal(unauthRes.statusCode, 401);
+
+    // Con autorización -> 200 y ejecución de sincronización
+    const authRes = await app.inject({
+      method: 'POST',
+      url: '/api/obsidian/sync-rag',
+      headers: authHeaders,
+      payload: { force: true },
+    });
+    assert.equal(authRes.statusCode, 200);
+    const authBody = authRes.json();
+    assert.equal(authBody.success, true);
+    assert.ok(authBody.message.includes('completada exitosamente'));
+    assert.equal(authBody.data.totalFound, 2);
+    assert.equal(authBody.data.totalIndexed, 2);
+
+    await app.close();
   });
 
   // Limpieza final

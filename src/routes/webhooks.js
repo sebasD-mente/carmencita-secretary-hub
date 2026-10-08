@@ -1,5 +1,7 @@
 import { prisma } from '../core/prisma.js';
 import { config } from '../config.js';
+import { defaultObsidianDriveService } from '../services/obsidian-drive.service.js';
+import { defaultEmbeddingService } from '../services/embedding.service.js';
 
 export function registerRoutes(fastify, { brain, documentService, taskService, ideaService, calendarService, contactService, telegramAdapter, whatsappAdapter }) {
   // --- MIDDLEWARE GLOBAL DE SEGURIDAD PARA RUTAS /api/* ---
@@ -137,5 +139,23 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
     }
 
     return reply.code(400).send({ error: 'Canal no soportado. Usa telegram o whatsapp' });
+  });
+
+  // 9. Sincronización RAG masiva e idempotente de Obsidian Vault
+  fastify.post('/api/obsidian/sync-rag', async (request, reply) => {
+    const obsSvc = brain?.obsidianService || defaultObsidianDriveService;
+    const embSvc = brain?.embeddingService || defaultEmbeddingService;
+
+    if (!obsSvc) {
+      return reply.status(503).send({ error: 'ObsidianDriveService no disponible' });
+    }
+
+    const force = Boolean(request.body?.force);
+    const result = await obsSvc.syncVaultToVector({ embeddingService: embSvc, force });
+    return {
+      success: true,
+      message: 'Sincronización de Obsidian Vault a SemanticMemory completada exitosamente.',
+      data: result,
+    };
   });
 }
