@@ -237,6 +237,13 @@ export const CancelCalendarEventActionSchema = z.object({
   eventId: z.string().optional().nullable(),
 });
 
+export const SearchDocumentsActionSchema = z.object({
+  action: z.literal('SEARCH_DOCUMENTS'),
+  query: z.string().min(1, 'El término de búsqueda es obligatorio'),
+  category: z.enum(['FACTURA', 'CONTRATO', 'COTIZACION', 'GENERAL', 'TODOS']).optional().default('TODOS'),
+  limit: z.number().optional().default(5),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -260,6 +267,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   ListTasksActionSchema,
   RescheduleCalendarEventActionSchema,
   CancelCalendarEventActionSchema,
+  SearchDocumentsActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

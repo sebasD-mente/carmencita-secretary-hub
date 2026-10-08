@@ -24,6 +24,7 @@ export class ObsidianDriveService {
     vaultFolderId = config.obsidian?.vaultFolderId || '',
     driveClient = null,
     cacheTtlMs = 5 * 60 * 1000,
+    embeddingService = null,
   } = {}) {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
@@ -31,6 +32,7 @@ export class ObsidianDriveService {
     this.vaultFolderName = vaultFolderName;
     this.vaultFolderId = vaultFolderId || null;
     this.driveClient = driveClient;
+    this.embeddingService = embeddingService;
     this.cachedSubfolderIds = new Map();
 
     // Caché en memoria para el árbol del Vault (TTL de 5 minutos)
@@ -375,13 +377,26 @@ ${content}${linksBlock}
     // Invalidar caché en memoria del Vault tras crear nota exitosamente
     this._vaultCache.timestamp = 0;
 
-    return {
+    const result = {
       fileId: createdFile?.data?.id,
       fileName,
       folder,
       webViewLink: createdFile?.data?.webViewLink,
       rawContent: markdownBody,
     };
+
+    const emb = this.embeddingService;
+    if (emb && typeof emb.saveMemory === 'function') {
+      this.indexNoteContentToVector({
+        fileId: result.fileId,
+        name: fileName,
+        folder,
+        content: markdownBody,
+        embeddingService: emb,
+      }).catch((err) => console.warn('[ObsidianDriveService RAG] Error indexando nota:', err.message));
+    }
+
+    return result;
   }
 
   async readNote({ fileId = null, name = null, folder = null } = {}) {
@@ -432,12 +447,98 @@ ${content}${linksBlock}
     });
 
     this._vaultCache.timestamp = 0;
-    return {
+    const result = {
       fileId: res.data?.id || existing.fileId,
       fileName: res.data?.name || existing.fileName,
       content: updatedContent,
       webViewLink: res.data?.webViewLink,
     };
+
+    const emb = this.embeddingService;
+    if (emb && typeof emb.saveMemory === 'function') {
+      this.indexNoteContentToVector({
+        fileId: result.fileId,
+        name: result.fileName,
+        folder,
+        content: updatedContent,
+        embeddingService: emb,
+      }).catch((err) => console.warn('[ObsidianDriveService RAG] Error indexando anexo en Drive:', err.message));
+    }
+
+    return result;
+  }
+
+  /**
+   * Divide el contenido markdown en fragmentos de texto respetando párrafos y encabezados (~500 a 800 caracteres).
+   */
+  _chunkMarkdown(content, maxChunkLength = 800) {
+    if (!content || typeof content !== 'string') return [];
+    const paragraphs = content.split(/\n{2,}/);
+    const chunks = [];
+    let currentChunk = '';
+
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (!trimmed) continue;
+      if ((currentChunk.length + trimmed.length) > maxChunkLength && currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = '';
+      }
+      currentChunk += (currentChunk ? '\n\n' : '') + trimmed;
+    }
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+    return chunks;
+  }
+
+  /**
+   * Vectoriza una nota específica hacia SemanticMemory con categoría 'OBSIDIAN'.
+   */
+  async indexNoteContentToVector({ fileId, name, folder = null, content = null, embeddingService = null, maxChunkLength = 800 } = {}) {
+    const embService = embeddingService || this.embeddingService;
+    if (!embService || typeof embService.saveMemory !== 'function') return;
+
+    let body = content;
+    if (!body) {
+      const note = await this.readNote({ fileId, name, folder });
+      body = note?.content;
+    }
+    if (!body) return;
+
+    const chunks = this._chunkMarkdown(body, maxChunkLength);
+    const cleanTitle = name ? name.replace(/\.md$/i, '') : 'Nota';
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkText = `[Nota: ${cleanTitle}] ${chunks[i]}`;
+      await embService.saveMemory({
+        content: chunkText,
+        category: 'OBSIDIAN',
+        metadata: {
+          fileId,
+          fileName: name,
+          cleanTitle,
+          folderPath: folder || '',
+          chunkIndex: i,
+          totalChunks: chunks.length,
+        },
+      });
+    }
+  }
+
+  /**
+   * Búsqueda Semántica de Notas en SemanticMemory
+   */
+  async searchNotesSemantic({ query, embeddingService = null, limit = 5 } = {}) {
+    const embService = embeddingService || this.embeddingService;
+    if (!embService || typeof embService.searchSimilarMemories !== 'function') {
+      return this.searchNotes({ query, maxResults: limit });
+    }
+    return await embService.searchSimilarMemories(query, {
+      category: 'OBSIDIAN',
+      limit,
+      minSimilarity: 0.50,
+    });
   }
 }
 

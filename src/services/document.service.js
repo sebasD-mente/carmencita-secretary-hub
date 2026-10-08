@@ -1,11 +1,15 @@
 import { prisma as defaultPrisma } from '../core/prisma.js';
 import { defaultStorageProvider } from './storage.provider.js';
+import { defaultEmbeddingService } from './embedding.service.js';
 import { DocumentCategorySchema, InvoiceMetadataSchema } from '../validators/actions.schema.js';
 
 export class DocumentService {
-  constructor(prismaClient = defaultPrisma, storageProvider = defaultStorageProvider) {
+  constructor(prismaClient = defaultPrisma, storageProvider = defaultStorageProvider, embeddingService = undefined) {
     this.prisma = prismaClient;
     this.storage = storageProvider;
+    this.embeddingService = embeddingService !== undefined
+      ? embeddingService
+      : (prismaClient === defaultPrisma ? defaultEmbeddingService : null);
   }
 
   /**
@@ -33,7 +37,7 @@ export class DocumentService {
     });
 
     // 2. Persistir registro en Prisma (dentro de transacción ACID si incluye factura)
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const document = await tx.document.create({
         data: {
           fileName: fileInfo.fileName,
@@ -96,6 +100,45 @@ export class DocumentService {
         ...document,
         invoice,
       };
+    });
+
+    // 3. Vectorización Automática RAG hacia SemanticMemory
+    if (this.embeddingService && typeof this.embeddingService.saveMemory === 'function' && (summary || invoiceData || metadata)) {
+      const isInvoice = validatedCategory === 'FACTURA' || Boolean(invoiceData);
+      const categoryTag = isInvoice ? 'FACTURA' : 'DOCUMENTO';
+      const rawInv = result.invoice || invoiceData;
+      const vendorInfo = rawInv?.vendor ? `Proveedor: ${rawInv.vendor}. ` : '';
+      const amountInfo = rawInv?.totalAmount ? `Monto: ${rawInv.currency || 'GTQ'} ${rawInv.totalAmount}. ` : '';
+      const textToEmbed = `[${categoryTag}: ${originalName}] ${vendorInfo}${amountInfo}${summary || ''}`.trim();
+
+      await this.embeddingService.saveMemory({
+        content: textToEmbed,
+        category: categoryTag,
+        metadata: {
+          documentId: result.id,
+          originalName,
+          category: validatedCategory,
+          vendor: rawInv?.vendor || null,
+          totalAmount: rawInv?.totalAmount || null,
+        },
+      }).catch((err) => console.warn('[DocumentService RAG] Error vectorizando documento:', err.message));
+    }
+
+    return result;
+  }
+
+  /**
+   * Búsqueda semántica documental en SemanticMemory
+   */
+  async searchDocumentsSemantic({ query, category = null, limit = 5 } = {}) {
+    if (!this.embeddingService || typeof this.embeddingService.searchSimilarMemories !== 'function') {
+      return await this.listDocuments({ limit });
+    }
+    const catFilter = category === 'FACTURA' ? 'FACTURA' : (category && category !== 'TODOS' ? 'DOCUMENTO' : null);
+    return await this.embeddingService.searchSimilarMemories(query, {
+      category: catFilter,
+      limit,
+      minSimilarity: 0.45,
     });
   }
 

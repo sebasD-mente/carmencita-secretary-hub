@@ -26,6 +26,8 @@ function makeActionResult(opts) {
     voiceFile: opts.voiceFile || null,
     hasDocument: opts.hasDocument || false,
     documentFile: opts.documentFile || null,
+    hasDocuments: opts.hasDocuments || false,
+    documents: opts.documents || null,
     hasCalendarEvent: opts.hasCalendarEvent || false,
     calendarEvent: opts.calendarEvent || null,
     calendarEvents: opts.calendarEvents || null,
@@ -70,6 +72,13 @@ export class CarmencitaBrain {
     this.mediaService = deps?.mediaService !== undefined ? deps.mediaService : defaultMediaService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
     this.modelPool = deps?.modelPool || (config.ai.modelPool?.length ? config.ai.modelPool : [config.ai.modelName]);
+
+    if (this.documentService && !this.documentService.embeddingService && this.embeddingService && typeof this.embeddingService.saveMemory === 'function') {
+      this.documentService.embeddingService = this.embeddingService;
+    }
+    if (this.obsidianService && !this.obsidianService.embeddingService && this.embeddingService && typeof this.embeddingService.saveMemory === 'function') {
+      this.obsidianService.embeddingService = this.embeddingService;
+    }
 
     this.ai = deps?.ai || null;
     if (!this.ai && config.ai.geminiApiKey) {
@@ -168,18 +177,24 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
   {"action": "READ_OBSIDIAN_NOTE", "title": "nombre o título de la nota", "folder": "opcional"}
 - Cuando Sebastián te pida agregar, anexar o complementar una nota existente en Obsidian:
   {"action": "APPEND_OBSIDIAN_NOTE", "title": "título", "content": "texto a agregar", "folder": "opcional"}
-- DIRECTIVA DE BÚSQUEDA PANORÁMICA:
+- DIRECTIVA DE BÚSQUEDA PANORÁMICA Y CONCEPTUAL:
   Cuando Sebastián pregunte de forma general qué notas tiene, pida un resumen de su bóveda o un reporte general de Obsidian, emite SEARCH_OBSIDIAN_NOTES con query: "" (cadena vacía) y maxResults: 20 para traer el panorama completo.
+  Si Sebastián hace preguntas conceptuales sobre el contenido de su bóveda (ej: qué acordamos sobre los stands, qué ideas de diseño tenemos, qué proveedores de madera se han visto), Carmencita utilizará búsqueda semántica para encontrar los fragmentos exactos y explicará la respuesta.
 - BLINDAJE TAXATIVO ANTI-AGY:
   PROHIBIDO terminantemente emitir RUN_AGY_TASK para consultar, listar o buscar notas en Obsidian. Carmencita NUNCA debe enviar comandos de terminal para resolver tareas de su Segundo Cerebro; debe usar siempre SEARCH_OBSIDIAN_NOTES, READ_OBSIDIAN_NOTE, APPEND_OBSIDIAN_NOTE o SAVE_OBSIDIAN_NOTE a través de su propio conector.
 - Cuando Sebastián te pida buscar notas existentes en su bóveda de Obsidian:
   {
     "action": "SEARCH_OBSIDIAN_NOTES",
-    "query": "término o título a buscar (o vacío para panorama completo)",
+    "query": "término, concepto o título a buscar (o vacío para panorama completo)",
     "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional",
     "maxResults": 20
   }
 - Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
+
+BÓVEDA DOCUMENTAL Y FACTURAS:
+- Carmencita cuenta con acceso a la bóveda documental de Sebastián para consultar facturas, cotizaciones, contratos y documentos resguardados.
+- Cuando Sebastián pregunte por documentos o facturas (ej: cuánto pagó de internet, qué dice la cotización de stands, facturas de imprenta, cláusulas de contratos):
+  {"action": "SEARCH_DOCUMENTS", "query": "concepto a buscar (ej: factura de internet, cotización de stands)", "category": "FACTURA|CONTRATO|COTIZACION|TODOS"}
 
 GOOGLE CALENDAR & GESTIÓN DE CITAS:
 - Para agendar nueva cita: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
@@ -207,6 +222,7 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Leer nota en Obsidian: {"action": "READ_OBSIDIAN_NOTE", "title": "nombre o título de la nota", "folder": "opcional"}
 - Anexar a nota en Obsidian: {"action": "APPEND_OBSIDIAN_NOTE", "title": "título", "content": "texto a agregar", "folder": "opcional"}
 - Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o vacío para reporte general", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional", "maxResults": 20}
+- Buscar en documentos, facturas y cotizaciones: {"action": "SEARCH_DOCUMENTS", "query": "concepto a buscar (ej: factura de internet, cotización de stands)", "category": "FACTURA|CONTRATO|COTIZACION|TODOS"}
 - Agendar cita en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
 - Reprogramar cita en Calendar: {"action": "RESCHEDULE_CALENDAR_EVENT", "query": "nombre del evento", "newStartDateTime": "YYYY-MM-DDTHH:mm:ss"}
@@ -1047,12 +1063,123 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
       }
     }
 
+    if (parsedAction.action === 'SEARCH_DOCUMENTS') {
+      if (!this.documentService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de documentos no está disponible en este momento.',
+          actionData: parsedAction,
+        });
+      }
+
+      let results = [];
+      let docErr = null;
+      try {
+        results = await this.documentService.searchDocumentsSemantic({
+          query: parsedAction.query,
+          category: parsedAction.category,
+          limit: parsedAction.limit || 5,
+        });
+      } catch (err) {
+        console.error('[Brain Document] Error buscando documentos:', err.message);
+        docErr = err.message;
+      }
+
+      let reply = '';
+      if (docErr) {
+        reply = `⚠️ Sebastián querido, ocurrió un inconveniente al consultar tu bóveda de documentos: ${docErr}`;
+      } else if (!results || results.length === 0) {
+        reply = `Sebastián querido, busqué en tu bóveda de documentos y facturas sobre "${parsedAction.query}" pero no encontré registros coincidentes.`;
+      } else {
+        const resumen = results.map((r, i) => {
+          const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {});
+          const docName = meta.originalName || meta.fileName || r.fileName || r.originalName || 'Documento';
+          const vendor = meta.vendor ? ` | Proveedor: ${meta.vendor}` : (r.invoice?.vendor ? ` | Proveedor: ${r.invoice.vendor}` : '');
+          const total = meta.totalAmount ? ` | Monto: GTQ ${meta.totalAmount}` : (r.invoice?.totalAmount ? ` | Monto: ${r.invoice.currency || 'GTQ'} ${r.invoice.totalAmount}` : '');
+          const sim = r.similarity !== undefined ? ` (Relevancia: ${(r.similarity * 100).toFixed(0)}%)` : '';
+          const body = r.content || r.summary || '';
+          return `[Documento ${i + 1}] ${docName}${vendor}${total}${sim}\nDetalle: ${body}`;
+        }).join('\n\n');
+
+        const contextUserText = context?.userText || parsedAction.query;
+        reply = await this._synthesizeToolResults({
+          userText: contextUserText,
+          toolName: 'Bóveda Documental y Facturas',
+          dataSummary: `Sebastián te pidió: "${contextUserText}". Buscaste en su bóveda de documentos y facturas y encontraste lo siguiente:\n\n${resumen}\n\nInstrucción: Explica con claridad ejecutiva qué documentos o facturas corresponden a su consulta...`,
+          context,
+        });
+      }
+
+      return makeActionResult({
+        reply,
+        hasDocument: Boolean(results && results.length > 0),
+        hasDocuments: Boolean(results && results.length > 0),
+        documents: results,
+        actionData: parsedAction,
+        fullHistoryText: `${reply}\n[Búsqueda en Bóveda Documental: "${parsedAction.query}" -> ${results?.length || 0} coincidencias]`,
+      });
+    }
+
     if (parsedAction.action === 'SEARCH_OBSIDIAN_NOTES') {
       if (!this.obsidianService) {
         return makeActionResult({
           reply: '⚠️ Sebastián querido, el servicio de Obsidian en Google Drive aún no está configurado en mis variables de entorno.',
           actionData: parsedAction,
         });
+      }
+
+      const rawQ = (parsedAction.query || '').trim();
+      const normQ = rawQ.toLowerCase();
+      const GENERIC_KEYWORDS = [
+        'reporte', 'resumen', 'notas', 'todas', 'todo', 'general',
+        'lista', 'listado', 'boveda', 'bóveda', 'segundo cerebro', 'obsidian',
+      ];
+      const isPanoramic = !rawQ || GENERIC_KEYWORDS.includes(normQ);
+      const isConceptual = !isPanoramic && (
+        /(\b(?:qué|que|cómo|como|cuál|cual|cuáles|cuales|dónde|donde|por qué|porque|quién|quien|cuánto|cuanto)\b|\?)/i.test(normQ) ||
+        normQ.split(/\s+/).filter(Boolean).length >= 3
+      );
+
+      if (isConceptual && typeof this.obsidianService.searchNotesSemantic === 'function') {
+        let semanticChunks = [];
+        try {
+          semanticChunks = await this.obsidianService.searchNotesSemantic({
+            query: parsedAction.query,
+            embeddingService: this.embeddingService,
+            limit: parsedAction.maxResults || 5,
+          });
+        } catch (err) {
+          console.warn('[Brain Obsidian] Error en búsqueda semántica:', err.message);
+        }
+
+        const isSemanticMemoryResult = Array.isArray(semanticChunks) &&
+          semanticChunks.length > 0 &&
+          (semanticChunks[0].category === 'OBSIDIAN' || semanticChunks[0].similarity !== undefined);
+
+        if (isSemanticMemoryResult) {
+          const dataSummary = semanticChunks.map((chunk, i) => {
+            const meta = typeof chunk.metadata === 'string' ? JSON.parse(chunk.metadata) : (chunk.metadata || {});
+            const title = meta.cleanTitle || meta.fileName || 'Nota';
+            const folder = meta.folderPath ? ` (${meta.folderPath})` : '';
+            const sim = chunk.similarity !== undefined ? ` [Similitud: ${(chunk.similarity * 100).toFixed(0)}%]` : '';
+            return `[Fragmento ${i + 1} de Nota: "${title}"${folder}${sim}]\n${chunk.content}`;
+          }).join('\n\n');
+
+          const userText = context?.userText || parsedAction.query;
+          const reply = await this._synthesizeToolResults({
+            userText,
+            toolName: 'Obsidian Vault (Búsqueda Conceptual Semántica)',
+            dataSummary: `Sebastián preguntó sobre el contenido de su Obsidian Vault: "${userText}".\nSe recuperaron los siguientes fragmentos conceptuales reales de sus notas:\n\n${dataSummary}\n\nInstrucción: Responde directamente a lo que Sebastián preguntó explicando la respuesta conceptual y citando con claridad el nombre de la nota fuente.`,
+            context,
+          });
+
+          return makeActionResult({
+            reply,
+            actionData: parsedAction,
+            hasObsidianNotes: true,
+            obsidianNotes: semanticChunks,
+            fullHistoryText: `${reply}\n[Búsqueda conceptual en Obsidian: "${parsedAction.query}" -> ${semanticChunks.length} fragmentos recuperados]`,
+          });
+        }
       }
 
       let notes = [];

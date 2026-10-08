@@ -42,6 +42,7 @@ import {
   ListTasksActionSchema,
   RescheduleCalendarEventActionSchema,
   CancelCalendarEventActionSchema,
+  SearchDocumentsActionSchema,
   parseCarmencitaAction,
 } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
@@ -4101,6 +4102,269 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(resCancel.hasCalendarEvent, true);
     assert.equal(resCancel.actionData.action, 'CANCEL_CALENDAR_EVENT');
     assert.ok(resCancel.reply.includes('cancelado la cita'));
+  });
+
+  await t.test('45. Chunking e Indexación Vectorial de Obsidian (indexNoteContentToVector y searchNotesSemantic)', async () => {
+    // 1. Vector sintético y Mock de Embedding
+    const vecStand = Array.from({ length: 768 }, (_, i) => (i < 50 ? 1 : 0));
+    const vecStandQuery = Array.from({ length: 768 }, (_, i) => (i < 50 ? 0.96 : 0));
+
+    const mockAiObsidianRag = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecStand } }),
+      },
+    };
+
+    const embeddingSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAiObsidianRag });
+    const obsidianService = new ObsidianDriveService({
+      embeddingService: embeddingSvc,
+    });
+
+    // 2. Probar _chunkMarkdown
+    const markdownContent = `# Especificaciones de Stands 2026\n\n` +
+      `Para la feria del mueble utilizaremos estructura de pino tratado con acabados en laca mate.\n\n` +
+      `El sistema de iluminación constará de tiras LED cálidas de 3000K ocultas tras los paneles modulares.\n\n` +
+      `El proveedor seleccionado para la carpintería es Maderas del Norte con entrega estimada el 15 de noviembre.`;
+
+    const chunks = obsidianService._chunkMarkdown(markdownContent, 120);
+    assert.ok(chunks.length >= 2, 'Debe dividir en múltiples fragmentos respetando los párrafos');
+
+    // 3. Probar indexNoteContentToVector
+    const initialMemCount = mockPrisma._data.semanticMemories.length;
+    await obsidianService.indexNoteContentToVector({
+      fileId: 'file_stand_01',
+      name: 'Especificaciones Stand Madera.md',
+      folder: '02_Projects',
+      content: markdownContent,
+      embeddingService: embeddingSvc,
+      maxChunkLength: 120,
+    });
+
+    const newMemCount = mockPrisma._data.semanticMemories.length;
+    assert.ok(newMemCount > initialMemCount, 'Debe haber guardado los fragmentos en SemanticMemory');
+
+    const obsidianMemories = mockPrisma._data.semanticMemories.filter((m) => m.category === 'OBSIDIAN');
+    assert.ok(obsidianMemories.length >= chunks.length);
+    assert.equal(obsidianMemories[0].category, 'OBSIDIAN');
+    assert.ok(obsidianMemories[0].content.includes('[Nota: Especificaciones Stand Madera]'));
+    assert.equal(obsidianMemories[0].metadata.fileName, 'Especificaciones Stand Madera.md');
+    assert.equal(obsidianMemories[0].metadata.folderPath, '02_Projects');
+
+    // 4. Probar searchNotesSemantic
+    const mockAiQuery = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecStandQuery } }),
+      },
+    };
+    const queryEmbSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAiQuery });
+
+    const searchResults = await obsidianService.searchNotesSemantic({
+      query: 'acabados y madera de los stands',
+      embeddingService: queryEmbSvc,
+      limit: 3,
+    });
+
+    assert.ok(searchResults.length > 0, 'Debe encontrar fragmentos semánticos afines');
+    assert.equal(searchResults[0].category, 'OBSIDIAN');
+    assert.ok(searchResults[0].content.includes('Especificaciones Stand Madera'));
+    assert.ok(searchResults[0].similarity >= 0.50);
+  });
+
+  await t.test('46. Vectorización y Búsqueda Semántica Documental (saveDocument con RAG y SEARCH_DOCUMENTS)', async () => {
+    // 1. Validación de esquema Zod para SEARCH_DOCUMENTS
+    const parsedAction = SearchDocumentsActionSchema.parse({
+      action: 'SEARCH_DOCUMENTS',
+      query: 'factura de imprenta',
+      category: 'FACTURA',
+    });
+    assert.equal(parsedAction.action, 'SEARCH_DOCUMENTS');
+    assert.equal(parsedAction.query, 'factura de imprenta');
+    assert.equal(parsedAction.category, 'FACTURA');
+    assert.equal(parsedAction.limit, 5);
+
+    // 2. Vector sintético y Servicio de Documentos con RAG
+    const vecInvoice = Array.from({ length: 768 }, (_, i) => (i >= 50 && i < 100 ? 1 : 0));
+    const vecInvoiceQuery = Array.from({ length: 768 }, (_, i) => (i >= 50 && i < 100 ? 0.95 : 0));
+
+    const mockAiDoc = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecInvoice } }),
+      },
+    };
+
+    const docEmbeddingSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAiDoc });
+    const docServiceWithRag = new DocumentService(mockPrisma, storageProvider, docEmbeddingSvc);
+
+    const initialMemories = mockPrisma._data.semanticMemories.length;
+    const fakeBuffer = Buffer.from('%PDF-1.4 Factura de Imprenta Vinil Stands...');
+    const savedInvoice = await docServiceWithRag.saveDocument({
+      buffer: fakeBuffer,
+      originalName: 'factura_imprenta_vinil.pdf',
+      mimeType: 'application/pdf',
+      category: 'FACTURA',
+      summary: 'Impresión de gran formato y vinil adhesivo para stands',
+      invoiceData: {
+        vendor: 'Impresos Rápidos GT',
+        item: 'Vinil mate 120m2',
+        totalAmount: 2450.00,
+        currency: 'GTQ',
+      },
+    });
+
+    assert.ok(savedInvoice.id);
+    assert.ok(savedInvoice.invoice);
+    assert.ok(mockPrisma._data.semanticMemories.length > initialMemories, 'Debe haber vectorizado la factura en SemanticMemory');
+
+    const invoiceMem = mockPrisma._data.semanticMemories.find((m) => m.category === 'FACTURA');
+    assert.ok(invoiceMem, 'Debe existir un recuerdo con categoría FACTURA');
+    assert.ok(invoiceMem.content.includes('Impresos Rápidos GT'));
+    assert.ok(invoiceMem.content.includes('2450'));
+    assert.equal(invoiceMem.metadata.originalName, 'factura_imprenta_vinil.pdf');
+
+    // 3. Búsqueda Semántica Documental (searchDocumentsSemantic)
+    const mockAiDocQuery = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecInvoiceQuery } }),
+      },
+    };
+    docServiceWithRag.embeddingService = new EmbeddingService({ prisma: mockPrisma, ai: mockAiDocQuery });
+
+    const searchDocsResult = await docServiceWithRag.searchDocumentsSemantic({
+      query: '¿Cuánto pagamos de vinil en la imprenta?',
+      category: 'FACTURA',
+      limit: 5,
+    });
+
+    assert.ok(searchDocsResult.length > 0, 'Debe recuperar la factura mediante búsqueda semántica');
+    assert.equal(searchDocsResult[0].category, 'FACTURA');
+    assert.ok(searchDocsResult[0].content.includes('Impresos Rápidos GT'));
+
+    // 4. Acción SEARCH_DOCUMENTS en CarmencitaBrain con Síntesis por IA
+    let capturedSynthesisPrompt = null;
+    const mockAiBrainDoc = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string'
+            ? contents[0]
+            : (contents?.[0]?.parts?.[0]?.text || '');
+
+          if (promptStr.includes('Ejecutaste la herramienta')) {
+            capturedSynthesisPrompt = promptStr;
+            return {
+              text: 'Sebastián querido, revisé tu bóveda documental: pagamos GTQ 2,450.00 a Impresos Rápidos GT por el vinil mate de los stands según la factura resguardada.',
+            };
+          }
+
+          return {
+            text: '```json\n' +
+              JSON.stringify({
+                action: 'SEARCH_DOCUMENTS',
+                query: 'factura imprenta vinil',
+                category: 'FACTURA',
+              }) +
+              '\n```',
+          };
+        },
+        embedContent: async () => ({ embedding: { values: vecInvoiceQuery } }),
+      },
+    };
+
+    const brainDoc = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiBrainDoc,
+      documentService: docServiceWithRag,
+      embeddingService: docServiceWithRag.embeddingService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const brainDocResult = await brainDoc.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: '¿cuánto pagamos en la última factura de imprenta?',
+    });
+
+    assert.equal(brainDocResult.hasDocuments, true);
+    assert.equal(brainDocResult.actionData.action, 'SEARCH_DOCUMENTS');
+    assert.ok(brainDocResult.reply.includes('Impresos Rápidos GT') || brainDocResult.reply.includes('2,450'));
+    assert.ok(capturedSynthesisPrompt, 'Debe haber pasado los resultados por _synthesizeToolResults');
+  });
+
+  await t.test('47. Búsqueda Conceptual en Obsidian con Síntesis (SEARCH_OBSIDIAN_NOTES semántico)', async () => {
+    const vecWoodStand = Array.from({ length: 768 }, (_, i) => (i >= 150 && i < 200 ? 1 : 0));
+    const vecWoodQuery = Array.from({ length: 768 }, (_, i) => (i >= 150 && i < 200 ? 0.97 : 0));
+
+    // Guardar fragmento conceptual en SemanticMemory
+    await mockPrisma.$executeRawUnsafe(
+      `INSERT INTO "SemanticMemory" (id, category, content, embedding, metadata, "createdAt")
+       VALUES (gen_random_uuid(), $1, $2, $3::vector, $4::jsonb, NOW())`,
+      'OBSIDIAN',
+      '[Nota: Stand Feria 2026] Acordamos usar bastidores de madera de pino de 2x2 pulgadas con unión tipo caja y espiga para garantizar estabilidad.',
+      JSON.stringify(vecWoodStand),
+      JSON.stringify({
+        fileName: 'Stand Feria 2026.md',
+        cleanTitle: 'Stand Feria 2026',
+        folderPath: '02_Projects',
+        chunkIndex: 0,
+        totalChunks: 1,
+      })
+    );
+
+    const mockAiObsidianQuery = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecWoodQuery } }),
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string'
+            ? contents[0]
+            : (contents?.[0]?.parts?.[0]?.text || '');
+
+          if (promptStr.includes('Ejecutaste la herramienta')) {
+            return {
+              text: 'Sebastián querido, según la nota "Stand Feria 2026" en tu carpeta de Proyectos, acordamos utilizar bastidores de madera de pino de 2x2 pulgadas con uniones de caja y espiga para garantizar total estabilidad estructural.',
+            };
+          }
+
+          return {
+            text: '```json\n' +
+              JSON.stringify({
+                action: 'SEARCH_OBSIDIAN_NOTES',
+                query: '¿qué especificaciones acordamos para el stand de madera?',
+              }) +
+              '\n```',
+          };
+        },
+      },
+    };
+
+    const embServiceObsidian = new EmbeddingService({ prisma: mockPrisma, ai: mockAiObsidianQuery });
+    const obsidianSvc = new ObsidianDriveService({
+      embeddingService: embServiceObsidian,
+    });
+
+    const brainObsidian = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidianQuery,
+      obsidianService: obsidianSvc,
+      embeddingService: embServiceObsidian,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const conceptualResult = await brainObsidian.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: '¿qué especificaciones acordamos para el stand de madera?',
+    });
+
+    assert.equal(conceptualResult.hasObsidianNotes, true);
+    assert.equal(conceptualResult.actionData.action, 'SEARCH_OBSIDIAN_NOTES');
+    assert.ok(conceptualResult.reply.includes('Stand Feria 2026'), 'Debe citar la nota fuente');
+    assert.ok(conceptualResult.reply.includes('madera de pino') || conceptualResult.reply.includes('bastidores'), 'Debe sintetizar la respuesta conceptual');
   });
 
   // Limpieza final

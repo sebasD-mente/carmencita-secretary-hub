@@ -76,7 +76,11 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
   fastify.get('/api/documents', async (request) => {
     const limit = parseInt(request.query.limit || '20', 10);
     const category = request.query.category || null;
+    const query = request.query.q || request.query.query || null;
     const docSvc = documentService || brain?.documentService;
+    if (query && typeof docSvc.searchDocumentsSemantic === 'function') {
+      return await docSvc.searchDocumentsSemantic({ query, category, limit });
+    }
     return await docSvc.listDocuments({ limit, category });
   });
 
