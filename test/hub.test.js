@@ -2330,13 +2330,23 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(fallbackBrief.includes('20°C, Soleado'));
     assert.ok(fallbackBrief.includes('¡Que sea un día muy exitoso para Deko Labs!'));
 
-    // 3. CarmencitaBrain On-Demand: Consulta en tiempo real por chat
+    // 3. CarmencitaBrain On-Demand: Consulta en tiempo real por chat con síntesis agéntica
     const mockAiGmail = {
       models: {
-        generateContent: async () => ({
-          text: '¡Enseguida reviso tu bandeja de entrada de Gmail, Sebastián!\n' +
-            '```json\n{"action": "CHECK_GMAIL", "maxResults": 5}\n```',
-        }),
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          if (promptStr.includes('Eres Carmencita') || promptStr.includes('siguientes datos reales')) {
+            return {
+              text: '✉️ <b>Bandeja de Gmail (2 correos pendientes):</b>\n\n' +
+                '1. 📩 <b>De:</b> Impresos Rápidos\n   <b>Asunto:</b> Confirmación de entrega stand\n\n' +
+                '2. 📩 <b>De:</b> Cliente VIP\n   <b>Asunto:</b> Comprobante de transferencia bancaria',
+            };
+          }
+          return {
+            text: '¡Enseguida reviso tu bandeja de entrada de Gmail, Sebastián!\n' +
+              '```json\n{"action": "CHECK_GMAIL", "maxResults": 5}\n```',
+          };
+        },
       },
     };
 
@@ -3198,7 +3208,11 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(foundEmails[0].id, 'msg_ai_studio');
     assert.equal(foundEmails[0].from, 'Google AI Studio <googleai-noreply@google.com>');
     assert.equal(foundEmails[0].subject, '[Action Required] Update thinking_budget and sampling parameters');
-    assert.equal(capturedListQuery, 'Google AI Studio', 'No debe forzar is:unread ni category:primary al buscar por remitente o tema');
+    assert.equal(
+      capturedListQuery,
+      'Google AI Studio -category:social -category:promotions -from:facebookmail -from:instagram -from:tiktok',
+      'No debe forzar is:unread ni category:primary al buscar por remitente o tema, y debe excluir ruido social y promociones'
+    );
 
     // 2. GmailService.getEmailDetails con decodificación de cuerpo de mensaje
     const emailDetails = await gmailDeepService.getEmailDetails({ messageId: 'msg_ai_studio' });
@@ -3344,6 +3358,317 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(gmailSearchResult.reply.includes('thinking_budget'));
     assert.equal(gmailSearchResult.hasVoice, true, 'Debe generar nota de voz cuando el usuario pide resumen en audio');
     assert.ok(gmailSearchResult.voiceFile);
+  });
+
+  await t.test('39. Bucle de Síntesis Agéntica en Búsqueda Múltiple de Gmail (CHECK_GMAIL sin trampa de correo único y exclusión de ruido)', async () => {
+    // 1. Verificación de exclusión de ruido en GmailService.searchEmails y soporte de hasta 30 resultados
+    let capturedListParams = null;
+    const mockGmailClient = {
+      users: {
+        messages: {
+          list: async ({ q, maxResults }) => {
+            capturedListParams = { q, maxResults };
+            return {
+              data: {
+                messages: [
+                  { id: 'sub_01', threadId: 'thread_01' },
+                  { id: 'sub_02', threadId: 'thread_02' },
+                  { id: 'sub_03', threadId: 'thread_03' },
+                ],
+              },
+            };
+          },
+          get: async ({ id }) => {
+            const map = {
+              sub_01: {
+                snippet: 'Tu suscripción a Netflix Premium ha sido renovada por USD 15.99.',
+                payload: {
+                  headers: [
+                    { name: 'From', value: 'Netflix <info@mailer.netflix.com>' },
+                    { name: 'Subject', value: 'Recibo de pago mensual' },
+                    { name: 'Date', value: 'Wed, 07 Oct 2026 10:00:00 -0600' },
+                  ],
+                },
+              },
+              sub_02: {
+                snippet: 'Comprobante de pago exitoso de tu suscripción Spotify Familiar.',
+                payload: {
+                  headers: [
+                    { name: 'From', value: 'Spotify <no-reply@spotify.com>' },
+                    { name: 'Subject', value: 'Tu recibo de Spotify' },
+                    { name: 'Date', value: 'Tue, 06 Oct 2026 09:30:00 -0600' },
+                  ],
+                },
+              },
+              sub_03: {
+                snippet: 'Acción requerida: el cobro de tu suscripción AWS Cloud ha fallado.',
+                payload: {
+                  headers: [
+                    { name: 'From', value: 'Amazon Web Services <no-reply-aws@amazon.com>' },
+                    { name: 'Subject', value: 'Aviso importante de facturación AWS' },
+                    { name: 'Date', value: 'Mon, 05 Oct 2026 14:15:00 -0600' },
+                  ],
+                },
+              },
+            };
+            return { data: map[id] || {} };
+          },
+        },
+      },
+    };
+
+    let getEmailDetailsCalled = false;
+    const gmailService = new GmailService({ gmailClient: mockGmailClient });
+    gmailService.getEmailDetails = async () => {
+      getEmailDetailsCalled = true;
+      return { id: 'sub_01', subject: 'Detalle', bodyText: 'Texto cuerpo' };
+    };
+
+    // Búsqueda de suscripciones con query específico
+    const searchRes = await gmailService.searchEmails({
+      query: 'suscripciones',
+      maxResults: 30,
+      includeRead: true,
+    });
+
+    assert.equal(searchRes.length, 3);
+    assert.equal(capturedListParams.maxResults, 30, 'Debe soportar maxResults de hasta 30');
+    assert.ok(capturedListParams.q.startsWith('suscripciones'));
+    assert.ok(capturedListParams.q.includes('-category:social -category:promotions -from:facebookmail -from:instagram -from:tiktok'), 'Debe excluir ruido social y promociones');
+
+    // Búsqueda que menciona redes sociales explícitamente: no debe concatenar exclusión
+    await gmailService.searchEmails({ query: 'notificaciones de facebook', maxResults: 10 });
+    assert.equal(capturedListParams.q, 'notificaciones de facebook', 'No debe excluir si la query menciona facebook explícitamente');
+
+    // 2. CarmencitaBrain con múltiples correos: Bucle ReAct de síntesis agéntica
+    let synthesizePromptCaptured = null;
+    const mockAiSynthesis = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          if (promptStr.includes('Eres Carmencita') || promptStr.includes('siguientes datos reales')) {
+            synthesizePromptCaptured = promptStr;
+            return {
+              text: 'Sebastián querido, analicé a fondo tus 3 correos de suscripciones:\n\n' +
+                '1. **Activas:** Netflix (USD 15.99) y Spotify Familiar se cobraron exitosamente.\n' +
+                '2. **Alerta:** En Amazon Web Services el cobro falló y requiere que actualices la tarjeta de inmediato.\n\n' +
+                '¿Deseas que te prepare un recordatorio para revisar AWS?',
+            };
+          }
+          return {
+            text: '```json\n{"action": "CHECK_GMAIL", "query": "suscripciones", "maxResults": 10}\n```',
+          };
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiSynthesis,
+      gmailService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const multiEmailResult = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, revisa mis suscripciones de este mes y dime cómo estamos',
+    });
+
+    // Validar eliminación de la trampa del correo único:
+    assert.equal(getEmailDetailsCalled, false, 'NO debe llamar a getEmailDetails para el correo #1 si hay múltiples resultados');
+    assert.equal(multiEmailResult.hasGmailEmails, true);
+    assert.equal(multiEmailResult.gmailEmails.length, 3);
+    assert.ok(synthesizePromptCaptured, 'Debe haber invocado el método de síntesis agéntica _synthesizeToolResults');
+    assert.ok(synthesizePromptCaptured.includes('Netflix'), 'El prompt de síntesis debe incluir Netflix');
+    assert.ok(synthesizePromptCaptured.includes('Spotify'), 'El prompt de síntesis debe incluir Spotify');
+    assert.ok(synthesizePromptCaptured.includes('Amazon Web Services'), 'El prompt de síntesis debe incluir AWS');
+
+    // Validar respuesta sintética ejecutiva y ausencia de plantilla truncada
+    assert.ok(multiEmailResult.reply.includes('Netflix'));
+    assert.ok(multiEmailResult.reply.includes('Spotify Familiar'));
+    assert.ok(multiEmailResult.reply.includes('Amazon Web Services'));
+    assert.ok(multiEmailResult.reply.includes('cobro falló'));
+  });
+
+  await t.test('40. Activación Real de RAG en processAudio y processImage (Paridad Multimodal de Memoria Semántica)', async () => {
+    let capturedAudioPrompt = null;
+    let capturedImagePrompt = null;
+    let memoryQueryCaptured = null;
+
+    const mockEmbeddingService = {
+      searchSimilarMemories: async (query) => {
+        memoryQueryCaptured = query;
+        return [
+          {
+            id: 'mem_audio_1',
+            category: 'PREFERENCIA',
+            content: 'Sebastián prefiere stands modulares con estructura de madera de pino y luz cálida',
+            similarity: 0.94,
+          },
+          {
+            id: 'mem_audio_2',
+            category: 'DIRECTIVA',
+            content: 'No contratar transporte externo si el taller de Deko Labs tiene camión disponible',
+            similarity: 0.82,
+          },
+        ];
+      },
+    };
+
+    const mockAiMultimodal = {
+      models: {
+        generateContent: async ({ contents }) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          if (contents[1]?.inlineData?.mimeType?.startsWith('audio')) {
+            capturedAudioPrompt = promptStr;
+            return { text: 'Sebastián querido, escuché tu audio y consideré tus preferencias sobre estructuras modulares de madera.' };
+          }
+          if (contents[1]?.inlineData?.mimeType?.startsWith('image')) {
+            capturedImagePrompt = promptStr;
+            return {
+              text: JSON.stringify({
+                type: 'FOTO_GENERAL',
+                isFactura: false,
+                title: 'Foto de referencia de stand',
+                extractedText: 'Muestra madera pino',
+                executiveReply: 'Sebastián querido, la foto del stand coincide con tu directiva de madera de pino.',
+                invoiceData: null,
+              }),
+            };
+          }
+          return { text: 'Respuesta multimodal' };
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiMultimodal,
+      embeddingService: mockEmbeddingService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    // 1. processAudio con RAG activo
+    const audioRes = await brain.processAudio({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      buffer: Buffer.from('FAKE_AUDIO_BUFFER'),
+      mimeType: 'audio/ogg',
+      text: 'Nota sobre los stands de la feria',
+    });
+
+    assert.ok(capturedAudioPrompt, 'Debe haberse capturado el prompt de audio');
+    assert.ok(capturedAudioPrompt.includes('🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):'), 'audioPrompt debe contener el bloque RAG');
+    assert.ok(capturedAudioPrompt.includes('Sebastián prefiere stands modulares con estructura de madera de pino'), 'audioPrompt debe contener el contenido del recuerdo');
+    assert.ok(capturedAudioPrompt.includes('(Afinidad: 94%)'));
+    assert.ok(audioRes.reply.includes('Sebastián querido'));
+
+    // 2. processImage con RAG activo
+    const imageRes = await brain.processImage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      buffer: Buffer.from('FAKE_IMAGE_BUFFER'),
+      mimeType: 'image/jpeg',
+      caption: 'Referencia para el nuevo stand',
+    });
+
+    assert.ok(capturedImagePrompt, 'Debe haberse capturado el prompt de imagen');
+    assert.ok(capturedImagePrompt.includes('🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):'), 'imagePrompt debe contener el bloque RAG');
+    assert.ok(capturedImagePrompt.includes('madera de pino'));
+    assert.ok(imageRes.reply.includes('Sebastián querido'));
+  });
+
+  await t.test('41. Worker Autónomo de Memoria en Segundo Plano (_extractAndSaveMemoryBackground)', async () => {
+    const savedMemories = [];
+    const mockEmbeddingService = {
+      searchSimilarMemories: async () => [],
+      saveMemory: async ({ content, category }) => {
+        savedMemories.push({ content, category });
+        return { success: true };
+      },
+    };
+
+    let backgroundPromptReceived = null;
+    const mockAiBackground = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          // Si es la llamada del worker de memoria en background:
+          if (promptStr.includes('Analiza esta interacción entre Sebastián y Carmencita:')) {
+            backgroundPromptReceived = promptStr;
+            if (promptStr.includes('los viernes por la tarde no me agendes')) {
+              return {
+                text: JSON.stringify({
+                  shouldSave: true,
+                  category: 'PREFERENCIA',
+                  content: 'No agendar reuniones los viernes por la tarde porque supervisa el taller',
+                }),
+              };
+            }
+            return { text: JSON.stringify({ shouldSave: false }) };
+          }
+
+          // Respuesta principal al usuario:
+          return {
+            text: '¡Por supuesto, mi jefe querido! Ya tomo nota de que los viernes por la tarde estás en taller y no te agendo nada.',
+          };
+        },
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiBackground,
+      embeddingService: mockEmbeddingService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    // 1. Mensaje con preferencia explícita a largo plazo
+    const reply1 = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita linda, los viernes por la tarde no me agendes reuniones con proveedores porque salgo a supervisar el taller.',
+    });
+
+    assert.ok(reply1.reply.includes('viernes por la tarde'));
+
+    // Esperar al worker asíncrono no bloqueante
+    if (brain._lastMemoryTask) {
+      await brain._lastMemoryTask;
+    }
+
+    assert.ok(backgroundPromptReceived, 'El prompt de extracción debió ser evaluado');
+    assert.equal(savedMemories.length, 1, 'Debe haber guardado autónomamente la preferencia detectada');
+    assert.equal(savedMemories[0].category, 'PREFERENCIA');
+    assert.equal(savedMemories[0].content, 'No agendar reuniones los viernes por la tarde porque supervisa el taller');
+
+    // 2. Charla casual o saludo: shouldSave false no debe insertar recuerdos basura
+    await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Hola Carmencita, buenos días. ¿Cómo estás hoy?',
+    });
+
+    if (brain._lastMemoryTask) {
+      await brain._lastMemoryTask;
+    }
+
+    assert.equal(savedMemories.length, 1, 'No debe guardar recuerdos para charlas casuales o saludos');
   });
 
   // Limpieza final

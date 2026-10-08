@@ -170,6 +170,7 @@ export const CheckGmailActionSchema = z.object({
   query: z.string().optional().default(''), // Vacío por omisión para delegar la lógica al servicio
   maxResults: z.number().optional().default(5),
   onlyImportant: z.boolean().optional().default(false), // Default false para no filtrar búsquedas deliberadas
+  readSingle: z.boolean().optional(),
 });
 
 export const GenerateQrActionSchema = z.object({

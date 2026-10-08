@@ -139,14 +139,20 @@ export class GmailService {
 
       let q = '';
       if (hasSpecificQuery) {
-        q = cleanQuery;
+        const mentionsSocial = /facebook|instagram|redes/i.test(cleanQuery);
+        const noiseExclusion = mentionsSocial
+          ? ''
+          : ' -category:social -category:promotions -from:facebookmail -from:instagram -from:tiktok';
+        q = `${cleanQuery}${noiseExclusion}`;
       } else {
         q = includeRead
-          ? 'label:INBOX -category:social -category:promotions -category:forums'
-          : 'label:INBOX is:unread -category:social -category:promotions -category:forums';
+          ? 'label:INBOX -category:social -category:promotions -category:forums -from:facebookmail -from:instagram -from:tiktok'
+          : 'label:INBOX is:unread -category:social -category:promotions -category:forums -from:facebookmail -from:instagram -from:tiktok';
       }
 
-      const fetchLimit = (!hasSpecificQuery && onlyImportant) ? Math.max(maxResults * 3, 15) : maxResults;
+      const parsedMax = Number(maxResults) || 5;
+      const effectiveMax = Math.min(Math.max(parsedMax, 1), 30);
+      const fetchLimit = (!hasSpecificQuery && onlyImportant) ? Math.max(effectiveMax * 3, 15) : effectiveMax;
 
       const listRes = await gmail.users.messages.list({
         userId: 'me',
@@ -197,7 +203,7 @@ export class GmailService {
       );
 
       const filtered = candidateMessages.filter(Boolean);
-      return filtered.slice(0, maxResults);
+      return filtered.slice(0, effectiveMax);
     } catch (err) {
       console.error('[GmailService] Error consultando mensajes en searchEmails:', err.message);
       return [];

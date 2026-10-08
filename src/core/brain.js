@@ -60,7 +60,7 @@ export class CarmencitaBrain {
     this.calendarService = deps?.calendarService || defaultCalendarService;
     this.contactService = deps?.contactService || defaultContactService;
     this.googleTasksService = deps?.googleTasksService || defaultGoogleTasksService;
-    this.embeddingService = deps?.embeddingService !== undefined ? deps.embeddingService : defaultEmbeddingService;
+    this.embeddingService = deps?.embeddingService !== undefined ? deps.embeddingService : (deps?.prisma ? null : defaultEmbeddingService);
     this.obsidianService = deps?.obsidianService !== undefined ? deps.obsidianService : defaultObsidianDriveService;
     this.gmailService = deps?.gmailService !== undefined ? deps.gmailService : defaultGmailService;
     this.voiceService = deps?.voiceService !== undefined ? deps.voiceService : defaultVoiceService;
@@ -276,6 +276,89 @@ TONO: Zalamero con clase ("la consentidora ejecutiva de Sebastián"), leal, afec
     throw lastError || new Error('Todos los modelos del pool fallaron');
   }
 
+  /**
+   * Síntesis agéntica de datos recuperados por herramientas.
+   * Permite que Gemini analice, clasifique y sintetice con criterio ejecutivo.
+   */
+  async _synthesizeToolResults({ userText, toolName, dataSummary, context = {} }) {
+    const prompt = `Eres Carmencita, la secretaria ejecutiva de alta dirección de Sebastián Jiménez.
+Sebastián te pidió: "${userText}"
+Ejecutaste la herramienta ${toolName} y obtuviste los siguientes datos reales del sistema:
+${dataSummary}
+
+Instrucciones de respuesta:
+1. Analiza y clasifica a fondo estos datos con criterio ejecutivo, calidez, elegancia y precisión.
+2. Responde directamente a lo que Sebastián necesita saber (por ejemplo, si pidió suscripciones, agrupa claramente cuáles están confirmadas/activas, cuáles canceladas recientemente, y cuáles tienen cobros fallidos o pendientes de atención).
+3. NO uses plantillas rígidas ni código sin procesar. Habla con fluidez natural de secretaria de alto nivel.
+4. No inventes datos que no figuren en la información recuperada.`;
+
+    if (!this.ai) {
+      return `Sebastián querido, aquí tengo la información recuperada de ${toolName}:\n\n${dataSummary}`;
+    }
+
+    try {
+      const response = await this._generateContentWithFailover({
+        contents: [prompt],
+        config: { systemInstruction: this.getSystemPrompt() },
+      });
+
+      return response?.text || 'Sebastián querido, ya procesé la información pero requiero confirmar un detalle contigo.';
+    } catch (err) {
+      console.warn(`[Brain] Error sintetizando resultados de ${toolName}:`, err.message);
+      return `Sebastián querido, aquí tengo la información recuperada de ${toolName}:\n\n${dataSummary}`;
+    }
+  }
+
+  /**
+   * Worker autónomo de memoria en segundo plano.
+   * Analiza interacciones y extrae hechos, acuerdos o preferencias duraderas sin bloquear al usuario.
+   */
+  async _extractAndSaveMemoryBackground({ userText, historyContent }) {
+    if (!this.embeddingService || typeof this.embeddingService.saveMemory !== 'function' || !this.ai) return;
+    if (!userText || typeof userText !== 'string' || !userText.trim()) return;
+
+    // Ceder el turno del event loop para garantizar comportamiento asíncrono no bloqueante
+    await new Promise((resolve) => setImmediate(resolve));
+
+    try {
+      const prompt = `Analiza esta interacción entre Sebastián y Carmencita:
+Usuario: "${userText}"
+Carmencita: "${historyContent}"
+
+¿Hay algún hecho nuevo, preferencia duradera, directiva de trabajo, proveedor habitual o acuerdo personal relevante que deba recordarse a largo plazo?
+Responde ESTRICTAMENTE con este JSON:
+{
+  "shouldSave": true | false,
+  "category": "PREFERENCIA" | "ACUERDO" | "PROVEEDOR" | "DIRECTIVA" | "GENERAL",
+  "content": "resumen claro en 1 oración del hecho o preferencia"
+}
+Si no hay información nueva o duradera (es solo saludo, consulta puntual o charla casual), responde con shouldSave: false.`;
+
+      const response = await this._generateContentWithFailover({
+        contents: [prompt],
+        config: { systemInstruction: 'Eres un extractor analítico de hechos, preferencias y directivas a largo plazo.' },
+      });
+
+      const raw = response?.text || '';
+      const match = raw.match(/\{[\s\S]*?\}/);
+      if (!match) return;
+
+      const parsed = JSON.parse(match[0]);
+      if (parsed.shouldSave === true && parsed.content && typeof parsed.content === 'string' && parsed.content.trim()) {
+        const allowedCategories = ['PREFERENCIA', 'ACUERDO', 'PROVEEDOR', 'DIRECTIVA', 'GENERAL'];
+        const catUpper = (parsed.category || '').toUpperCase();
+        const category = allowedCategories.includes(catUpper) ? catUpper : 'GENERAL';
+
+        await this.embeddingService.saveMemory({
+          content: parsed.content.trim(),
+          category,
+        });
+      }
+    } catch (err) {
+      console.warn('[Auto-RAG] Error en extracción autónoma de memoria:', err.message);
+    }
+  }
+
   async processTextMessage({ channel, senderId, senderName, text, onProgress = null }) {
     await this._logMessage({ channel, senderId, senderName, role: 'user', content: text });
 
@@ -360,6 +443,12 @@ Mensaje de Sebastián:
         rawAction: actionResult.actionData || null,
       });
 
+      // Worker autónomo de memoria en segundo plano (asíncrono no bloqueante)
+      if (this.embeddingService && !actionResult.hasMemory) {
+        this._lastMemoryTask = this._extractAndSaveMemoryBackground({ userText: text, historyContent })
+          .catch((err) => console.warn('[Auto-RAG] Fallo en tarea de memoria de fondo:', err.message));
+      }
+
       return actionResult;
     } catch (err) {
       console.error('[Brain] Error processing text:', err);
@@ -386,9 +475,25 @@ Mensaje de Sebastián:
     }
 
     try {
-      // Paso 1: Memoria de Contexto Obligatoria
+      // Paso 1: Memoria de Contexto Obligatoria y RAG
       const { recentMessages } = await this._getRecentContext(channel, senderId);
       const recentContextText = recentMessages.map((m) => `[${m.role}]: ${m.content}`).join('\n');
+
+      let relevantMemories = [];
+      if (this.embeddingService) {
+        try {
+          const ragQuery = (caption && caption.trim())
+            ? caption.trim()
+            : (recentMessages.length > 0 ? recentMessages.slice(-2).map((m) => m.content).join(' ') : 'documentos y proyectos');
+          relevantMemories = await this.embeddingService.searchSimilarMemories(ragQuery, { limit: 3 });
+        } catch (err) {
+          console.warn('[Brain Image RAG] Error recuperando recuerdos:', err.message);
+        }
+      }
+
+      const memoriesBlock = relevantMemories.length > 0
+        ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${relevantMemories.map((m) => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
+        : '';
 
       // Paso 2: Prompt de Clasificación Multimodal Universal
       const prompt = `Analiza esta imagen con visión ejecutiva de alto nivel para Sebastián Jiménez.
@@ -396,7 +501,7 @@ Mensaje de Sebastián:
 Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE para entender por qué te envía esta imagen.
 
 HISTORIAL RECIENTE:
-${recentContextText || 'Sin mensajes previos'}
+${recentContextText || 'Sin mensajes previos'}${memoriesBlock}
 
 Determina el tipo de imagen y responde estrictamente con este JSON:
 {
@@ -602,6 +707,22 @@ Responde únicamente con un objeto JSON:
 
       const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
 
+      let relevantMemories = [];
+      if (this.embeddingService) {
+        try {
+          const ragQuery = (text && text.trim())
+            ? text.trim()
+            : (recentMessages.length > 0 ? recentMessages.slice(-2).map((m) => m.content).join(' ') : 'directivas y preferencias');
+          relevantMemories = await this.embeddingService.searchSimilarMemories(ragQuery, { limit: 3 });
+        } catch (err) {
+          console.warn('[Brain Audio RAG] Error recuperando recuerdos:', err.message);
+        }
+      }
+
+      const memoriesBlock = relevantMemories.length > 0
+        ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${relevantMemories.map((m) => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
+        : '';
+
       const historyBlock = recentMessages.length > 0
         ? `\n📜 HISTORIAL DE CONVERSACIÓN RECIENTE (MEMORIA DE CONTEXTO):\n${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}\n`
         : '';
@@ -611,9 +732,9 @@ CONTEXTO TEMPORAL DEL SISTEMA:
 • Fecha y hora actual en Guatemala: ${ahoraGuatemala} (America/Guatemala / UTC-6)
 • Timestamp ISO 8601: ${ahoraIso}
 • Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
-• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${historyBlock}
+• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${historyBlock}${memoriesBlock}
 
-Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE para entender referencias como "lo que te pedí antes", "el reporte", "la nota" o temas que ya venían conversando. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones (sin viñetas, sin encabezados ni títulos de plantilla), como su secretaria ejecutiva Carmencita. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
+Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE y las directivas recuperadas para entender referencias como "lo que te pedí antes", "el reporte", "la nota" o temas que ya venían conversando. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones (sin viñetas, sin encabezados ni títulos de plantilla), como su secretaria ejecutiva Carmencita. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
 
       const response = await this._generateContentWithFailover({
         contents: [
@@ -625,7 +746,7 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
 
       const replyText = response.text || 'He escuchado tu nota de voz, Sebastián.';
       const actionResult = await this._executeExtractedActions(replyText, onProgress, {
-        userText: 'nota de voz recibida',
+        userText: text || 'nota de voz recibida',
         isAudio: true,
         channel,
         senderId,
@@ -646,6 +767,14 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
 
       const historyContent = actionResult.fullHistoryText || actionResult.reply || replyText;
       await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: historyContent });
+
+      // Worker autónomo de memoria en segundo plano (asíncrono no bloqueante)
+      if (this.embeddingService && !actionResult.hasMemory) {
+        const queryText = (text && text.trim()) || actionResult.reply || 'Nota de voz de Sebastián';
+        this._lastMemoryTask = this._extractAndSaveMemoryBackground({ userText: queryText, historyContent })
+          .catch((err) => console.warn('[Auto-RAG] Fallo en tarea de memoria de fondo:', err.message));
+      }
+
       return actionResult;
     } catch (err) {
       console.error('[Brain] Error processing audio:', err);
@@ -906,8 +1035,16 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
             });
           }
 
-          const specificQuery = (parsedAction.query || '').trim();
-          if (specificQuery && emails.length > 0 && typeof this.gmailService.getEmailDetails === 'function') {
+          const userText = context.userText || '';
+          const isExplicitSingle = Boolean(
+            parsedAction.readSingle === true ||
+            parsedAction.maxResults === 1 ||
+            /(?:leer|escuchar|abrir|detalle(?:\s+del)?|resumen(?:\s+en\s+audio)?\s+del?)\s+(?:el|este|un|ese)\s+(?:correo|email|mensaje)/i.test(userText) ||
+            /del\s+correo\s+de\b/i.test(userText) ||
+            /\b(?:el|este)\s+correo\s+(?:de|con|sobre)\b/i.test(userText)
+          );
+
+          if (emails.length > 0 && isExplicitSingle && typeof this.gmailService.getEmailDetails === 'function') {
             try {
               emailDetail = await this.gmailService.getEmailDetails({ messageId: emails[0].id });
             } catch (detErr) {
@@ -936,12 +1073,16 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
           `📌 <b>Resumen Ejecutivo:</b>\n${bodySnippet}${emailDetail.bodyText && emailDetail.bodyText.length > 500 ? '...' : ''}\n\n` +
           `¿Deseas que prepare una respuesta o realice alguna acción con este correo?`;
       } else {
-        const list = emails.map((em, i) => {
-          const fromClean = em.from ? em.from.replace(/<[^>]+>/, '').trim() : 'Desconocido';
-          const snippetClean = em.snippet ? `\n   <i>${em.snippet.slice(0, 100)}...</i>` : '';
-          return `${i + 1}. 📩 <b>De:</b> ${fromClean}\n   <b>Asunto:</b> ${em.subject}${snippetClean}`;
-        }).join('\n\n');
-        emailReply = `${cleanText ? cleanText + '\n\n' : ''}✉️ <b>Bandeja de Gmail (${emails.length} correo${emails.length === 1 ? '' : 's'} pendiente${emails.length === 1 ? '' : 's'}):</b>\n\n${list}`;
+        const dataSummary = emails.map((em, i) =>
+          `[Correo ${i + 1}] Fecha: ${em.date} | De: ${em.from} | Asunto: ${em.subject} | Fragmento: ${em.snippet}`
+        ).join('\n');
+
+        emailReply = await this._synthesizeToolResults({
+          userText: context.userText || parsedAction.query || 'consulta de correos',
+          toolName: 'Gmail',
+          dataSummary,
+          context,
+        });
       }
 
       let voiceFile = null;
