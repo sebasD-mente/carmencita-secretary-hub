@@ -107,9 +107,10 @@ export class EmbeddingService {
    * @param {number} [options.limit=3] - Máximo número de resultados
    * @param {number} [options.minSimilarity=0.55] - Umbral mínimo de similitud coseno (0.0 a 1.0)
    * @param {string|null} [options.category=null] - Filtro opcional por categoría
+   * @param {string|null} [options.excludeCategory=null] - Exclusión opcional de categoría
    * @returns {Promise<Array>} Lista de recuerdos con id, category, content, metadata, createdAt y similarity
    */
-  async searchSimilarMemories(queryText, { limit = 3, minSimilarity = 0.55, category = null } = {}) {
+  async searchSimilarMemories(queryText, { limit = 3, minSimilarity = 0.55, category = null, excludeCategory = null } = {}) {
     if (!queryText || typeof queryText !== 'string' || !queryText.trim()) {
       return [];
     }
@@ -121,6 +122,7 @@ export class EmbeddingService {
 
     const vectorStr = `[${queryVector.join(',')}]`;
     const categoryClause = category ? `AND category = '${category.replace(/'/g, "''")}'` : '';
+    const excludeCategoryClause = excludeCategory ? `AND category != '${excludeCategory.replace(/'/g, "''")}'` : '';
 
     const memories = await this.prisma.$queryRawUnsafe(
       `SELECT id, category, content, metadata, "createdAt",
@@ -128,6 +130,7 @@ export class EmbeddingService {
        FROM "SemanticMemory"
        WHERE embedding IS NOT NULL
        ${categoryClause}
+       ${excludeCategoryClause}
        AND (1 - (embedding <=> $1::vector)) >= $2
        ORDER BY embedding <=> $1::vector ASC
        LIMIT $3`,
@@ -140,6 +143,24 @@ export class EmbeddingService {
       ...m,
       similarity: typeof m.similarity === 'number' ? m.similarity : parseFloat(m.similarity || 0),
     }));
+  }
+
+  /**
+   * Consulta las directivas cardinales activas de Sebastián
+   * @param {Object} [options]
+   * @param {number} [options.limit=10]
+   * @returns {Promise<Array>}
+   */
+  async getActiveDirectives({ limit = 10 } = {}) {
+    if (!this.prisma?.semanticMemory?.findMany) {
+      return [];
+    }
+    return this.prisma.semanticMemory.findMany({
+      where: { category: 'DIRECTIVA' },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: { id: true, content: true, createdAt: true },
+    });
   }
 }
 

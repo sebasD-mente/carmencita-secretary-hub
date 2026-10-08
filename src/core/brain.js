@@ -13,6 +13,7 @@ import { defaultObsidianDriveService } from '../services/obsidian-drive.service.
 import { defaultGmailService } from '../services/gmail.service.js';
 import { defaultVoiceService } from '../services/voice.service.js';
 import { defaultMediaService } from '../services/media.service.js';
+import { defaultDiagnosticsService } from '../services/diagnostics.service.js';
 import { parseCarmencitaAction } from '../validators/actions.schema.js';
 
 function makeActionResult(opts) {
@@ -51,6 +52,8 @@ function makeActionResult(opts) {
     progressSent: opts.progressSent || false,
     syncResult: opts.syncResult || null,
     hasObsidianSync: Boolean(opts.syncResult),
+    hasDiagnostics: opts.hasDiagnostics || false,
+    diagnostics: opts.diagnostics || null,
     toString() { return this.reply; },
     includes(s) { return this.reply.includes(s); },
   };
@@ -72,6 +75,7 @@ export class CarmencitaBrain {
     this.gmailService = deps?.gmailService !== undefined ? deps.gmailService : defaultGmailService;
     this.voiceService = deps?.voiceService !== undefined ? deps.voiceService : defaultVoiceService;
     this.mediaService = deps?.mediaService !== undefined ? deps.mediaService : defaultMediaService;
+    this.diagnosticsService = deps?.diagnosticsService !== undefined ? deps.diagnosticsService : defaultDiagnosticsService;
     this.agyBridge = agyBridge || deps?.agyBridge || null;
     this.modelPool = deps?.modelPool || (config.ai.modelPool?.length ? config.ai.modelPool : [config.ai.modelName]);
 
@@ -177,6 +181,10 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
   }
 - Cuando Sebastián te pida leer o consultar el contenido completo de una nota existente en Obsidian:
   {"action": "READ_OBSIDIAN_NOTE", "title": "nombre o título de la nota", "folder": "opcional"}
+- Cuando Sebastián te pida actualizar, corregir, modificar o reescribir una nota existente en Obsidian:
+  {"action": "UPDATE_OBSIDIAN_NOTE", "title": "Título de la nota", "content": "Nuevo contenido completo", "folder": "opcional"}
+- Regla Cardinal de Modificación de Notas:
+  "Si Sebastián pide actualizar, corregir, modificar o reescribir una nota existente en Obsidian, emite UPDATE_OBSIDIAN_NOTE para evitar clonar archivos duplicados."
 - Cuando Sebastián te pida agregar, anexar o complementar una nota existente en Obsidian:
   {"action": "APPEND_OBSIDIAN_NOTE", "title": "título", "content": "texto a agregar", "folder": "opcional"}
 - DIRECTIVA DE BÚSQUEDA PANORÁMICA Y CONCEPTUAL:
@@ -191,9 +199,15 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
     "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional",
     "maxResults": 20
   }
-- Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
+- Wikilinks y Grafo de Conocimiento:
+  NO inyectar wikilinks inventados como [[Sebastián Jiménez]] o [[Deko Labs]] por omisión si generan notas vacías de 0 bytes. Solo incluir wikilinks si el usuario pide explícitamente vincular conceptos o notas ya existentes.
 - Sincronizar bóveda completa de Obsidian hacia memoria semántica: {"action": "SYNC_OBSIDIAN_VAULT", "force": false}
   Si Sebastián pide explícitamente "sincroniza mi obsidian", "actualiza tus notas" o "absorbe mi bóveda", debe emitir la acción SYNC_OBSIDIAN_VAULT.
+
+INTROSPECCIÓN, SALUD Y AUTO-DIAGNÓSTICO DEL SISTEMA (DIAGNOSE_SYSTEM):
+- Regla Cardinal de Auto-Diagnóstico:
+  "Si Sebastián te pide un reporte de tus errores, diagnóstico del sistema, telemetría, o menciona que tienes fallos o problemas de funcionamiento, emite INMEDIATAMENTE la acción DIAGNOSE_SYSTEM. NUNCA emitas SEARCH_OBSIDIAN_NOTES ante solicitudes de auditoría de errores propios."
+- Para autodiagnóstico: {"action": "DIAGNOSE_SYSTEM", "scope": "full"}
 
 BÓVEDA DOCUMENTAL Y FACTURAS:
 - Carmencita cuenta con acceso a la bóveda documental de Sebastián para consultar facturas, cotizaciones, contratos y documentos resguardados.
@@ -223,6 +237,8 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Consultar tareas: {"action": "LIST_TASKS", "status": "PENDIENTE|COMPLETADA|TODAS"}
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 - Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
+- Actualizar nota existente en Obsidian Vault: {"action": "UPDATE_OBSIDIAN_NOTE", "title": "Título de la nota", "content": "Nuevo contenido completo", "folder": "opcional"}
+- Diagnóstico del sistema y reporte de errores: {"action": "DIAGNOSE_SYSTEM", "scope": "full|errors|services|pm2"}
 - Leer nota en Obsidian: {"action": "READ_OBSIDIAN_NOTE", "title": "nombre o título de la nota", "folder": "opcional"}
 - Anexar a nota en Obsidian: {"action": "APPEND_OBSIDIAN_NOTE", "title": "título", "content": "texto a agregar", "folder": "opcional"}
 - Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o vacío para reporte general", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional", "maxResults": 20}
@@ -427,14 +443,25 @@ Si no hay información nueva o duradera (es solo saludo, consulta puntual o char
       }).format(new Date());
       const ahoraIso = new Date().toISOString();
 
+      let activeDirectives = [];
       let relevantMemories = [];
       if (this.embeddingService) {
         try {
-          relevantMemories = await this.embeddingService.searchSimilarMemories(text, { limit: 3 });
+          if (typeof this.embeddingService.getActiveDirectives === 'function') {
+            activeDirectives = await this.embeddingService.getActiveDirectives({ limit: 10 });
+          }
+          relevantMemories = await this.embeddingService.searchSimilarMemories(text, {
+            limit: 3,
+            excludeCategory: 'OBSIDIAN',
+          });
         } catch (err) {
           console.warn('[Brain RAG] Error recuperando recuerdos:', err.message);
         }
       }
+
+      const directivesBlock = activeDirectives.length > 0
+        ? `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${activeDirectives.map((d) => `- ${d.content}`).join('\n')}\n`
+        : '';
 
       const memoriesBlock = relevantMemories.length > 0
         ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):
@@ -451,7 +478,7 @@ CONTEXTO DEL SISTEMA:
 • Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
 • Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}
 • Interacciones recientes:
-${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}${memoriesBlock}
+${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}${directivesBlock}${memoriesBlock}
 
 Mensaje de Sebastián:
 "${text}"
@@ -525,17 +552,28 @@ Mensaje de Sebastián:
       const { recentMessages } = await this._getRecentContext(channel, senderId);
       const recentContextText = recentMessages.map((m) => `[${m.role}]: ${m.content}`).join('\n');
 
+      let activeDirectives = [];
       let relevantMemories = [];
       if (this.embeddingService) {
         try {
+          if (typeof this.embeddingService.getActiveDirectives === 'function') {
+            activeDirectives = await this.embeddingService.getActiveDirectives({ limit: 10 });
+          }
           const ragQuery = (caption && caption.trim())
             ? caption.trim()
             : (recentMessages.length > 0 ? recentMessages.slice(-2).map((m) => m.content).join(' ') : 'documentos y proyectos');
-          relevantMemories = await this.embeddingService.searchSimilarMemories(ragQuery, { limit: 3 });
+          relevantMemories = await this.embeddingService.searchSimilarMemories(ragQuery, {
+            limit: 3,
+            excludeCategory: 'OBSIDIAN',
+          });
         } catch (err) {
           console.warn('[Brain Image RAG] Error recuperando recuerdos:', err.message);
         }
       }
+
+      const directivesBlock = activeDirectives.length > 0
+        ? `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${activeDirectives.map((d) => `- ${d.content}`).join('\n')}\n`
+        : '';
 
       const memoriesBlock = relevantMemories.length > 0
         ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${relevantMemories.map((m) => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
@@ -547,7 +585,7 @@ Mensaje de Sebastián:
 Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE para entender por qué te envía esta imagen.
 
 HISTORIAL RECIENTE:
-${recentContextText || 'Sin mensajes previos'}${memoriesBlock}
+${recentContextText || 'Sin mensajes previos'}${directivesBlock}${memoriesBlock}
 
 Determina el tipo de imagen y responde estrictamente con este JSON:
 {
@@ -753,17 +791,28 @@ Responde únicamente con un objeto JSON:
 
       const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
 
+      let activeDirectives = [];
       let relevantMemories = [];
       if (this.embeddingService) {
         try {
+          if (typeof this.embeddingService.getActiveDirectives === 'function') {
+            activeDirectives = await this.embeddingService.getActiveDirectives({ limit: 10 });
+          }
           const ragQuery = (text && text.trim())
             ? text.trim()
             : (recentMessages.length > 0 ? recentMessages.slice(-2).map((m) => m.content).join(' ') : 'directivas y preferencias');
-          relevantMemories = await this.embeddingService.searchSimilarMemories(ragQuery, { limit: 3 });
+          relevantMemories = await this.embeddingService.searchSimilarMemories(ragQuery, {
+            limit: 3,
+            excludeCategory: 'OBSIDIAN',
+          });
         } catch (err) {
           console.warn('[Brain Audio RAG] Error recuperando recuerdos:', err.message);
         }
       }
+
+      const directivesBlock = activeDirectives.length > 0
+        ? `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${activeDirectives.map((d) => `- ${d.content}`).join('\n')}\n`
+        : '';
 
       const memoriesBlock = relevantMemories.length > 0
         ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${relevantMemories.map((m) => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`
@@ -778,7 +827,7 @@ CONTEXTO TEMPORAL DEL SISTEMA:
 • Fecha y hora actual en Guatemala: ${ahoraGuatemala} (America/Guatemala / UTC-6)
 • Timestamp ISO 8601: ${ahoraIso}
 • Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})
-• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${historyBlock}${memoriesBlock}
+• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${historyBlock}${directivesBlock}${memoriesBlock}
 
 Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE y las directivas recuperadas para entender referencias como "lo que te pedí antes", "el reporte", "la nota" o temas que ya venían conversando. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones (sin viñetas, sin encabezados ni títulos de plantilla), como su secretaria ejecutiva Carmencita. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
 
@@ -1378,6 +1427,105 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         obsidianNote: appendResult,
         actionData: parsedAction,
         fullHistoryText: `${reply}\n[Contenido anexado a nota de Obsidian: ${appendResult.fileName || parsedAction.title}]`,
+      });
+    }
+
+    if (parsedAction.action === 'UPDATE_OBSIDIAN_NOTE') {
+      if (!this.obsidianService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de Obsidian en Google Drive aún no está configurado en mis variables de entorno.',
+          actionData: parsedAction,
+        });
+      }
+
+      let updateResult = null;
+      let updateErr = null;
+      try {
+        updateResult = await this.obsidianService.updateNote({
+          title: parsedAction.title,
+          content: parsedAction.content,
+          folder: parsedAction.folder || null,
+          tags: parsedAction.tags || [],
+          wikilinks: parsedAction.wikilinks || [],
+          overwrite: true,
+        });
+      } catch (err) {
+        console.error('[Brain Obsidian] Error actualizando nota en Drive:', err.message);
+        updateErr = err.message;
+      }
+
+      if (updateErr || !updateResult) {
+        const reply = `⚠️ Sebastián querido, no pude actualizar la nota "${parsedAction.title}" en Google Drive: ${updateErr || 'Error desconocido'}.`;
+        return makeActionResult({
+          reply,
+          actionData: parsedAction,
+        });
+      }
+
+      const noteTitle = updateResult.fileName || parsedAction.title;
+      const noteFolder = updateResult.folder || parsedAction.folder || '01_Inbox';
+      const noteConfirmation = `\n\n📓 *Nota actualizada in-situ en Obsidian Vault:*\n📂 Carpeta: \`/${noteFolder}/${noteTitle}\`\nQuedó sincronizada y re-indexada sin duplicados en tu bóveda.`;
+      const reply = cleanText
+        ? `${cleanText}${noteConfirmation}`
+        : `¡Listo mi Sebastián querido! He actualizado exitosamente la nota **${noteTitle}** en Obsidian.${noteConfirmation}`;
+
+      return makeActionResult({
+        reply,
+        hasObsidianNote: true,
+        obsidianNote: updateResult,
+        actionData: parsedAction,
+        fullHistoryText: `${reply}\n[Nota actualizada en Obsidian Vault: /${noteFolder}/${noteTitle}]`,
+      });
+    }
+
+    if (parsedAction.action === 'DIAGNOSE_SYSTEM') {
+      let diagStatus = null;
+      let diagErr = null;
+      try {
+        if (this.diagnosticsService && typeof this.diagnosticsService.getSystemStatus === 'function') {
+          diagStatus = await this.diagnosticsService.getSystemStatus({ scope: parsedAction.scope || 'full' });
+        }
+      } catch (err) {
+        console.error('[Brain Diagnostics] Error en auto-diagnóstico:', err.message);
+        diagErr = err.message;
+      }
+
+      let reply = '';
+      if (diagErr) {
+        reply = `⚠️ Sebastián querido, ocurrió un error al realizar el auto-diagnóstico del sistema: ${diagErr}`;
+      } else if (diagStatus) {
+        const uptime = diagStatus.process?.uptimeFormatted || `${diagStatus.process?.uptimeSeconds || 0}s`;
+        const heap = diagStatus.process?.memoryUsage?.heapUsedMb ? `${diagStatus.process.memoryUsage.heapUsedMb} MB` : 'N/A';
+        const db = diagStatus.database?.status === 'CONNECTED'
+          ? `Conectada (${diagStatus.database.latencyMs}ms)`
+          : (diagStatus.database ? `Desconectada (${diagStatus.database?.error || 'Fallo'})` : 'No requerida');
+        const ws = diagStatus.googleWorkspace;
+        const wsStr = ws ? `Drive (${ws.drive ? '✅' : '❌'}), Gmail (${ws.gmail ? '✅' : '❌'}), Calendar (${ws.calendar ? '✅' : '❌'}), Tasks (${ws.tasks ? '✅' : '❌'})` : 'N/A';
+        const errLines = diagStatus.recentErrors || [];
+        const errDetail = errLines.length > 0
+          ? `\n\n⚠️ *Últimos eventos de error registrados (${errLines.length}):*\n${errLines.map(e => `• \`${e}\``).join('\n')}`
+          : '\n\n✨ *Estado de errores:* Ningún error reciente registrado.';
+
+        const diagReport = `🩺 *Diagnóstico de Salud e Introspección del Hub:*\n\n` +
+          `⏱️ *Uptime:* ${uptime}\n` +
+          `💾 *Memoria Heap:* ${heap}\n` +
+          `🗄️ PostgreSQL: ${db}\n` +
+          `☁️ Google Workspace: ${wsStr}${errDetail}\n\n` +
+          `Todos los sistemas se encuentran bajo supervisión activa, Sebastián querido.`;
+
+        reply = cleanText
+          ? `${cleanText}\n\n${diagReport}`
+          : diagReport;
+      } else {
+        reply = cleanText || `Sebastián querido, todos mis subsistemas operativos principales se encuentran activos y funcionando con normalidad.`;
+      }
+
+      return makeActionResult({
+        reply,
+        actionData: parsedAction,
+        diagnostics: diagStatus,
+        hasDiagnostics: Boolean(diagStatus),
+        fullHistoryText: `${reply}\n[Auto-diagnóstico de sistema (${parsedAction.scope || 'full'})]`,
       });
     }
 

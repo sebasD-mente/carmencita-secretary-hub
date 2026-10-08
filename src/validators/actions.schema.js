@@ -249,6 +249,20 @@ export const SyncObsidianVaultActionSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
+export const UpdateObsidianNoteActionSchema = z.object({
+  action: z.literal('UPDATE_OBSIDIAN_NOTE'),
+  title: z.string().min(1, 'El título es requerido'),
+  content: z.string().min(1, 'El contenido es requerido'),
+  folder: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  wikilinks: z.array(z.string()).optional(),
+});
+
+export const DiagnoseSystemActionSchema = z.object({
+  action: z.literal('DIAGNOSE_SYSTEM'),
+  scope: z.enum(['full', 'errors', 'services', 'pm2']).optional().default('full'),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -274,6 +288,8 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   CancelCalendarEventActionSchema,
   SearchDocumentsActionSchema,
   SyncObsidianVaultActionSchema,
+  UpdateObsidianNoteActionSchema,
+  DiagnoseSystemActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

@@ -23,10 +23,12 @@ import { CalendarService } from '../src/services/calendar.service.js';
 import { ContactService } from '../src/services/contact.service.js';
 import { GoogleTasksService } from '../src/services/google-tasks.service.js';
 import { EmbeddingService } from '../src/services/embedding.service.js';
-import { ObsidianDriveService } from '../src/services/obsidian-drive.service.js';
+import { ObsidianDriveService, normalizeNoteTitle } from '../src/services/obsidian-drive.service.js';
 import { GmailService, isPromotionalOrNoise, DEFAULT_GMAIL_QUERY } from '../src/services/gmail.service.js';
 import { MediaService } from '../src/services/media.service.js';
 import { VoiceService } from '../src/services/voice.service.js';
+import { DiagnosticsService, sanitizeLogLine } from '../src/services/diagnostics.service.js';
+import { cleanupObsidianDrive } from '../scripts/cleanup-obsidian-drive.js';
 import {
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
@@ -44,6 +46,8 @@ import {
   CancelCalendarEventActionSchema,
   SearchDocumentsActionSchema,
   SyncObsidianVaultActionSchema,
+  UpdateObsidianNoteActionSchema,
+  DiagnoseSystemActionSchema,
   parseCarmencitaAction,
 } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
@@ -315,6 +319,36 @@ class MockPrismaClient {
         return null;
       },
     };
+
+    this.semanticMemory = {
+      findMany: async ({ where = {}, orderBy = {}, take = 50, select = null } = {}) => {
+        let res = [...this._data.semanticMemories];
+        if (where.category) res = res.filter((m) => m.category === where.category);
+        if (orderBy?.createdAt === 'desc') {
+          res.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        }
+        if (take) res = res.slice(0, take);
+        if (select) {
+          res = res.map((item) => {
+            const selected = {};
+            for (const [k, v] of Object.entries(select)) {
+              if (v) selected[k] = item[k];
+            }
+            return selected;
+          });
+        }
+        return res;
+      },
+      create: async ({ data }) => {
+        const item = {
+          id: `sm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          createdAt: data.createdAt || new Date(),
+          ...data,
+        };
+        this._data.semanticMemories.unshift(item);
+        return item;
+      },
+    };
   }
 
   async $transaction(fn) {
@@ -374,6 +408,9 @@ class MockPrismaClient {
       const catMatch = query.match(/AND category = '([^']+)'/);
       const categoryFilter = catMatch ? catMatch[1] : null;
 
+      const excludeCatMatch = query.match(/AND category != '([^']+)'/);
+      const excludeCategoryFilter = excludeCatMatch ? excludeCatMatch[1] : null;
+
       function cosineSimilarity(a, b) {
         if (!a || !b || a.length !== b.length) return 0;
         let dot = 0;
@@ -391,6 +428,7 @@ class MockPrismaClient {
       const results = this._data.semanticMemories
         .filter((m) => m.embedding && m.embedding.length > 0)
         .filter((m) => !categoryFilter || m.category === categoryFilter)
+        .filter((m) => !excludeCategoryFilter || m.category !== excludeCategoryFilter)
         .map((m) => ({
           id: m.id,
           category: m.category,
@@ -4593,6 +4631,373 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(authBody.data.totalIndexed, 2);
 
     await app.close();
+  });
+
+  await t.test('51. UPDATE_OBSIDIAN_NOTE en ObsidianDriveService y CarmencitaBrain (actualización in-situ, coincidencia difusa, cero duplicados)', async () => {
+    // 0. Validación de Esquema Zod UpdateObsidianNoteActionSchema
+    const validUpdateAction = {
+      action: 'UPDATE_OBSIDIAN_NOTE',
+      title: 'Carmencita Secretary Hub - Automatizacion y Asistencia',
+      content: '# Carmencita Hub\n\nContenido completamente renovado y actualizado in-situ.',
+      folder: '02_Projects',
+      tags: ['carmencita', 'hub'],
+      wikilinks: ['STAND IA'],
+    };
+    const parsedAction = parseCarmencitaAction(validUpdateAction);
+    assert.ok(parsedAction, 'UPDATE_OBSIDIAN_NOTE debe ser validado por Zod');
+    assert.equal(parsedAction.action, 'UPDATE_OBSIDIAN_NOTE');
+    assert.equal(parsedAction.title, validUpdateAction.title);
+
+    // Validación de fallos: sin título o sin contenido
+    assert.equal(parseCarmencitaAction({ action: 'UPDATE_OBSIDIAN_NOTE', title: '', content: 'algo' }), null);
+    assert.equal(parseCarmencitaAction({ action: 'UPDATE_OBSIDIAN_NOTE', title: 'Titulo', content: '' }), null);
+
+    // 1. Normalización y Coincidencia Difusa (normalizeNoteTitle & findNoteByNameOrTitle)
+    // Diferencias tipográficas: em-dash vs guion simple y acentos
+    const titleWithEmDash = 'Carmencita Secretary Hub — Automatización y Asistencia.md';
+    const titleWithHyphen = 'Carmencita Secretary Hub - Automatizacion y Asistencia';
+    assert.equal(
+      normalizeNoteTitle(titleWithEmDash),
+      normalizeNoteTitle(titleWithHyphen),
+      'normalizeNoteTitle debe igualar variantes con em-dash, guiones y acentos'
+    );
+
+    const updatedDriveFiles = [];
+    const mockDrive = {
+      files: {
+        list: async () => {
+          return {
+            data: {
+              files: [
+                {
+                  id: 'file_carmencita_existing',
+                  name: 'Carmencita Secretary Hub — Automatización y Asistencia.md',
+                  webViewLink: 'https://drive.google.com/file/d/file_carmencita_existing/view',
+                  modifiedTime: '2026-10-07T12:00:00Z',
+                  parents: ['folder_02_projects'],
+                },
+              ],
+            },
+          };
+        },
+        update: async ({ fileId, media, requestBody }) => {
+          updatedDriveFiles.push({ fileId, media, requestBody });
+          return {
+            data: {
+              id: fileId,
+              name: 'Carmencita Secretary Hub — Automatización y Asistencia.md',
+              webViewLink: `https://drive.google.com/file/d/${fileId}/view`,
+            },
+          };
+        },
+        create: async () => {
+          throw new Error('create() NUNCA debe llamarse durante actualización in-situ');
+        },
+      },
+    };
+
+    const vecUpdate = Array.from({ length: 768 }, (_, i) => (i < 20 ? 1 : 0));
+    const mockAiUpdate = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecUpdate } }),
+      },
+    };
+    const updateEmbSvc = new EmbeddingService({ prisma: mockPrisma, ai: mockAiUpdate });
+
+    const obsidianService = new ObsidianDriveService({
+      vaultFolderName: 'vault',
+      driveClient: mockDrive,
+      embeddingService: updateEmbSvc,
+      prisma: mockPrisma,
+    });
+
+    // 2. Ejecución de updateNote con coincidencia difusa (sin fileId)
+    const updateResult = await obsidianService.updateNote({
+      title: 'Carmencita Secretary Hub - Automatizacion y Asistencia',
+      content: '# Carmencita Hub v2\n\nArquitectura actualizada sin duplicados.',
+      folder: '02_Projects',
+      tags: ['carmencita', 'deko-labs'],
+    });
+
+    assert.equal(updateResult.fileId, 'file_carmencita_existing');
+    assert.equal(updateResult.updated, true);
+    assert.equal(updatedDriveFiles.length, 1);
+    assert.equal(updatedDriveFiles[0].fileId, 'file_carmencita_existing');
+    assert.ok(updatedDriveFiles[0].media.body.includes('title: "Carmencita Secretary Hub — Automatización y Asistencia"'));
+    assert.ok(updatedDriveFiles[0].media.body.includes('Arquitectura actualizada sin duplicados.'));
+
+    // 3. Idempotencia en createNote: Si la nota ya existe, createNote delega a updateNote (cero duplicados)
+    const duplicateCreateResult = await obsidianService.createNote({
+      title: 'Carmencita Secretary Hub - Automatizacion y Asistencia',
+      content: '# Carmencita Hub v3\n\nIntento de creación duplicada delegado limpiamente.',
+      folder: '02_Projects',
+    });
+    assert.equal(duplicateCreateResult.fileId, 'file_carmencita_existing');
+    assert.equal(duplicateCreateResult.updated, true);
+    assert.equal(updatedDriveFiles.length, 2, 'Debe haber actualizado dos veces sin crear archivos nuevos');
+
+    // 4. Integración en CarmencitaBrain con acción UPDATE_OBSIDIAN_NOTE
+    const mockAiBrainUpdate = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Entendido, mi querido Sebastián! Actualizo de inmediato la nota en tu Obsidian Vault.\n```json\n' +
+            JSON.stringify({
+              action: 'UPDATE_OBSIDIAN_NOTE',
+              title: 'Carmencita Secretary Hub - Automatizacion y Asistencia',
+              content: '# Carmencita Hub v4\n\nContenido definitivo auditado por Gary.',
+              folder: '02_Projects',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brainUpdate = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiBrainUpdate,
+      obsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const brainUpdateRes = await brainUpdate.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Actualiza la nota de Carmencita Secretary Hub en Obsidian con el nuevo resumen',
+    });
+
+    assert.equal(brainUpdateRes.hasObsidianNote, true);
+    assert.equal(brainUpdateRes.actionData.action, 'UPDATE_OBSIDIAN_NOTE');
+    assert.equal(brainUpdateRes.obsidianNote.fileId, 'file_carmencita_existing');
+    assert.ok(brainUpdateRes.reply.includes('Nota actualizada in-situ en Obsidian Vault:'));
+    assert.ok(brainUpdateRes.reply.includes('file_carmencita_existing') || brainUpdateRes.reply.includes('Carmencita Secretary Hub'));
+  });
+
+  await t.test('52. Segregación de Memoria RAG (excludeCategory: \'OBSIDIAN\') e inyección persistente de directivas cardinales activas', async () => {
+    const vecDirectiva = Array.from({ length: 768 }, (_, i) => (i < 30 ? 1 : 0));
+    const vecObsidian = Array.from({ length: 768 }, (_, i) => (i < 30 ? 0.98 : 0));
+    const vecQuery = Array.from({ length: 768 }, (_, i) => (i < 30 ? 0.95 : 0));
+
+    const mockAiDirectives = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecQuery } }),
+        generateContent: async ({ contents }) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          return {
+            text: '¡Entendido Sebastián, mantengo todas tus directivas presentes siempre!',
+            promptReceived: promptStr,
+          };
+        },
+      },
+    };
+
+    const embServiceDirectives = new EmbeddingService({ prisma: mockPrisma, ai: mockAiDirectives });
+
+    // 1. Sembrar Directiva y Memoria de Obsidian en MockPrisma
+    await mockPrisma.$executeRawUnsafe(
+      `INSERT INTO "SemanticMemory" (id, category, content, embedding, metadata, "createdAt")
+       VALUES (gen_random_uuid(), $1, $2, $3::vector, $4::jsonb, NOW())`,
+      'DIRECTIVA',
+      'Sebastián exige no duplicar notas en Google Drive y actualizar in-situ.',
+      JSON.stringify(vecDirectiva),
+      null
+    );
+
+    await mockPrisma.$executeRawUnsafe(
+      `INSERT INTO "SemanticMemory" (id, category, content, embedding, metadata, "createdAt")
+       VALUES (gen_random_uuid(), $1, $2, $3::vector, $4::jsonb, NOW())`,
+      'OBSIDIAN',
+      '[Nota: Stand 2026] Detalles constructivos de stands para ferias.',
+      JSON.stringify(vecObsidian),
+      JSON.stringify({ fileId: 'f_obs_123' })
+    );
+
+    // 2. Validar getActiveDirectives
+    const activeDirectives = await embServiceDirectives.getActiveDirectives({ limit: 5 });
+    assert.ok(activeDirectives.length >= 1);
+    assert.ok(activeDirectives.some((d) => d.content.includes('no duplicar notas en Google Drive')));
+
+    // 3. Validar excludeCategory: 'OBSIDIAN' en searchSimilarMemories
+    const resultsWithExclusion = await embServiceDirectives.searchSimilarMemories('notas y directivas de Sebastián', {
+      limit: 5,
+      minSimilarity: 0.5,
+      excludeCategory: 'OBSIDIAN',
+    });
+
+    assert.ok(resultsWithExclusion.length > 0);
+    assert.ok(!resultsWithExclusion.some((r) => r.category === 'OBSIDIAN'), 'Ningún resultado debe ser de categoría OBSIDIAN');
+    assert.ok(resultsWithExclusion.some((r) => r.category === 'DIRECTIVA'), 'Debe incluir la directiva cardinal');
+
+    // 4. Validar inyección persistente de directivas en CarmencitaBrain
+    let capturedPromptInBrain = null;
+    const mockAiCapture = {
+      models: {
+        embedContent: async () => ({ embedding: { values: vecQuery } }),
+        generateContent: async ({ contents }) => {
+          capturedPromptInBrain = typeof contents?.[0] === 'string' ? contents[0] : '';
+          return {
+            text: '¡Por supuesto mi querido Sebastián, tus órdenes y directivas son sagradas para mí!',
+          };
+        },
+      },
+    };
+
+    const brainWithDirectives = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiCapture,
+      embeddingService: embServiceDirectives,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    await brainWithDirectives.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, confírmame que recuerdas mis directivas de trabajo',
+    });
+
+    assert.ok(capturedPromptInBrain, 'CarmencitaBrain debe haber generado el prompt');
+    assert.ok(
+      capturedPromptInBrain.includes('### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:'),
+      'El prompt debe incluir el bloque visible de directivas cardinales'
+    );
+    assert.ok(
+      capturedPromptInBrain.includes('no duplicar notas en Google Drive'),
+      'El prompt debe incluir la directiva activa de no duplicar notas'
+    );
+  });
+
+  await t.test('53. Acción agéntica DIAGNOSE_SYSTEM en CarmencitaBrain (diagnóstico rápido, prevención de falsos positivos con notas de Obsidian)', async () => {
+    // 0. Validación de Esquema Zod DiagnoseSystemActionSchema
+    const validDiagAction = { action: 'DIAGNOSE_SYSTEM', scope: 'full' };
+    const parsedDiag = parseCarmencitaAction(validDiagAction);
+    assert.ok(parsedDiag);
+    assert.equal(parsedDiag.action, 'DIAGNOSE_SYSTEM');
+    assert.equal(parsedDiag.scope, 'full');
+
+    const defaultDiag = parseCarmencitaAction({ action: 'DIAGNOSE_SYSTEM' });
+    assert.equal(defaultDiag.scope, 'full');
+
+    // 1. Prueba de Sanitización de Logs
+    assert.equal(
+      sanitizeLogLine('Error con token Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.xyz y apiKey AIzaSyD-123456789012345678901234567890123'),
+      'Error con token Bearer [REDACTED] y apiKey [REDACTED_API_KEY]'
+    );
+    assert.equal(
+      sanitizeLogLine('Autenticación fallida con AQ.abc123xyz456 y password="super_secret_pass"'),
+      'Autenticación fallida con [REDACTED_AUTH_KEY] y password=[REDACTED]'
+    );
+
+    // 2. Prueba unitaria de DiagnosticsService
+    const diagnosticsService = new DiagnosticsService({
+      prisma: mockPrisma,
+      obsidianService: { refreshToken: 'mock_token', driveClient: {} },
+      gmailService: { refreshToken: 'mock_token' },
+      calendarService: { refreshToken: 'mock_token' },
+      googleTasksService: { isConfigured: () => true },
+    });
+
+    const status = await diagnosticsService.getSystemStatus({ scope: 'full' });
+    assert.ok(status);
+    assert.equal(status.scope, 'full');
+    assert.ok(status.process);
+    assert.equal(status.process.status, 'ONLINE');
+    assert.ok(status.process.uptimeSeconds >= 0);
+    assert.ok(status.process.memoryUsage.heapUsedMb > 0);
+    assert.equal(status.database.status, 'CONNECTED');
+    assert.ok(typeof status.database.latencyMs === 'number');
+    assert.equal(status.googleWorkspace.drive, true);
+    assert.equal(status.googleWorkspace.gmail, true);
+    assert.equal(status.googleWorkspace.calendar, true);
+    assert.equal(status.googleWorkspace.tasks, true);
+
+    // 3. Acción Agéntica DIAGNOSE_SYSTEM en CarmencitaBrain ante reporte de errores
+    const mockAiBrainDiag = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Enseguida te genero tu reporte de telemetría y diagnóstico del sistema, mi querido Sebastián!\n```json\n' +
+            JSON.stringify({
+              action: 'DIAGNOSE_SYSTEM',
+              scope: 'full',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brainDiag = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiBrainDiag,
+      diagnosticsService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const diagResult = await brainDiag.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Carmencita, dame un reporte de tus errores con obsidian y estado del sistema',
+    });
+
+    assert.equal(diagResult.hasDiagnostics, true);
+    assert.equal(diagResult.actionData.action, 'DIAGNOSE_SYSTEM');
+    assert.ok(diagResult.diagnostics);
+    assert.equal(diagResult.diagnostics.database.status, 'CONNECTED');
+    assert.ok(diagResult.reply.includes('Diagnóstico de Salud'));
+    assert.ok(diagResult.reply.includes('Uptime:'));
+    assert.ok(diagResult.reply.includes('PostgreSQL: Conectada'));
+
+    // 4. Prueba del Script de Limpieza en Google Drive: cleanupObsidianDrive
+    const mockDriveFiles = [
+      { id: 'file_0_byte_orphan', name: 'Deko Labs.md', size: 0, folderPath: '', modifiedTime: '2026-10-06T10:00:00Z' },
+      { id: 'file_dup_old', name: 'STAND IA - Vision General.md', size: 500, folderPath: '02_Projects', modifiedTime: '2026-10-06T09:00:00Z' },
+      { id: 'file_dup_new', name: 'STAND IA — Visión General.md', size: 550, folderPath: '02_Projects', modifiedTime: '2026-10-07T10:00:00Z' },
+    ];
+    const deletedFileIds = [];
+
+    const mockCleanupDrive = {
+      files: {
+        list: async () => ({ data: { files: mockDriveFiles } }),
+        get: async ({ fileId }) => {
+          if (fileId === 'file_0_byte_orphan') return { data: '' };
+          return { data: '# Contenido real' };
+        },
+        delete: async ({ fileId }) => {
+          deletedFileIds.push(fileId);
+          return { data: {} };
+        },
+      },
+    };
+
+    const mockCleanupObsidianService = {
+      _getDriveClient: async () => mockCleanupDrive,
+      getOrCreateVaultFolder: async () => 'root_vault_id',
+      _vaultCache: { timestamp: 123 },
+    };
+
+    const cleanupReport = await cleanupObsidianDrive({
+      dryRun: false,
+      obsidianService: mockCleanupObsidianService,
+      driveClient: mockCleanupDrive,
+    });
+
+    assert.equal(cleanupReport.zeroByteNotes.length, 1);
+    assert.equal(cleanupReport.zeroByteNotes[0].name, 'Deko Labs.md');
+    assert.equal(cleanupReport.duplicateGroups.length, 1);
+    assert.equal(cleanupReport.duplicateGroups[0].official.id, 'file_dup_new', 'La nota más reciente debe ser la oficial');
+    assert.equal(cleanupReport.duplicateGroups[0].duplicates[0].id, 'file_dup_old');
+    assert.ok(deletedFileIds.includes('file_0_byte_orphan'), 'Debe haber eliminado la nota huérfana de 0 bytes');
+    assert.ok(deletedFileIds.includes('file_dup_old'), 'Debe haber eliminado el duplicado antiguo');
+    assert.equal(mockCleanupObsidianService._vaultCache.timestamp, 0, 'La caché debe haber sido invalidada tras la limpieza');
   });
 
   // Limpieza final

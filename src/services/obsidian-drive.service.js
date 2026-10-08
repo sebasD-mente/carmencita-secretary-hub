@@ -15,6 +15,19 @@ function matchesSearchTerm(target, term) {
   return targetLower.includes(termLower);
 }
 
+export function normalizeNoteTitle(title) {
+  if (!title || typeof title !== 'string') return '';
+  return title
+    .replace(/\.md$/i, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Elimina acentos/diacríticos
+    .toLowerCase()
+    .replace(/[—–]/g, '-') // Sustituye em-dash y en-dash por guion simple
+    .replace(/[\s_-]+/g, '-') // Normaliza espacios, guiones bajos y múltiples guiones
+    .replace(/^-+|-+$/g, '') // Elimina guiones al inicio o final
+    .trim();
+}
+
 export class ObsidianDriveService {
   constructor({
     clientId = config.google?.clientId,
@@ -332,9 +345,264 @@ export class ObsidianDriveService {
     return [];
   }
 
-  async createNote({ title, content, folder = '01_Inbox', tags = [], wikilinks = [] }) {
+  /**
+   * Búsqueda difusa y normalizada de una nota en el Vault.
+   * Normaliza acentos, guiones (em-dash, en-dash) y espacios.
+   */
+  async findNoteByNameOrTitle({ title, folder = null, fileId = null } = {}) {
+    if (fileId) {
+      if (this._vaultCache?.files?.length > 0) {
+        const foundById = this._vaultCache.files.find(f => f.id === fileId);
+        if (foundById) {
+          return {
+            fileId: foundById.id,
+            id: foundById.id,
+            name: foundById.name,
+            cleanTitle: foundById.cleanTitle || foundById.name.replace(/\.md$/i, ''),
+            folder: foundById.folderPath || '',
+            folderPath: foundById.folderPath || '',
+            relativePath: foundById.relativePath || foundById.name,
+            webViewLink: foundById.webViewLink,
+            modifiedTime: foundById.modifiedTime,
+          };
+        }
+      }
+    }
+
+    if (!title || typeof title !== 'string') return null;
+    const normTarget = normalizeNoteTitle(title);
+    if (!normTarget) return null;
+
+    let files = [];
+    try {
+      files = await this._buildVaultTree();
+    } catch {
+      // Si _buildVaultTree falla (entorno mock), intentar searchNotes
+    }
+    if ((!files || files.length === 0) && typeof this.searchNotes === 'function') {
+      try {
+        files = await this.searchNotes({ query: '', maxResults: 100 });
+      } catch {}
+    }
+
+    const normFolder = folder ? folder.toLowerCase().replace(/^\/+|\/+$/g, '') : null;
+
+    let matched = null;
+    if (files && files.length > 0) {
+      // 1. Si folder fue provisto, buscar coincidencia que cumpla título Y carpeta
+      if (normFolder) {
+        matched = files.find(f => {
+          const fNorm = normalizeNoteTitle(f.cleanTitle || f.name);
+          if (fNorm !== normTarget) return false;
+          const fFolder = (f.folderPath || f.folder || '').toLowerCase().replace(/^\/+|\/+$/g, '');
+          return fFolder === normFolder || fFolder.includes(normFolder) || (f.relativePath && f.relativePath.toLowerCase().includes(normFolder));
+        });
+      }
+
+      // 2. Si no se encontró por carpeta o no se especificó carpeta, buscar en todo el Vault
+      if (!matched) {
+        matched = files.find(f => normalizeNoteTitle(f.cleanTitle || f.name) === normTarget);
+      }
+    }
+
+    if (matched) {
+      return {
+        fileId: matched.id,
+        id: matched.id,
+        name: matched.name,
+        cleanTitle: matched.cleanTitle || (matched.name ? matched.name.replace(/\.md$/i, '') : ''),
+        folder: matched.folderPath || matched.folder || '',
+        folderPath: matched.folderPath || matched.folder || '',
+        relativePath: matched.relativePath || matched.name,
+        webViewLink: matched.webViewLink,
+        modifiedTime: matched.modifiedTime,
+      };
+    }
+
+    // 3. Fallback directo a Google Drive API si el árbol no tenía archivos
+    const drive = await this._getDriveClient();
+    if (drive) {
+      try {
+        let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
+        if (folder) {
+          const folderId = await this.getOrCreateSubfolder(folder);
+          if (folderId) {
+            q += ` and '${folderId}' in parents`;
+          }
+        }
+        const res = await drive.files.list({
+          q,
+          fields: 'files(id, name, webViewLink, modifiedTime, parents)',
+          pageSize: 100,
+        });
+        const driveFiles = res?.data?.files || [];
+        for (const df of driveFiles) {
+          if (normalizeNoteTitle(df.name) === normTarget) {
+            return {
+              fileId: df.id,
+              id: df.id,
+              name: df.name,
+              cleanTitle: df.name.replace(/\.md$/i, ''),
+              folder: folder || '',
+              folderPath: folder || '',
+              webViewLink: df.webViewLink,
+              modifiedTime: df.modifiedTime,
+            };
+          }
+        }
+      } catch {}
+    }
+
+    return null;
+  }
+
+  async findNoteFuzzy(options) {
+    return this.findNoteByNameOrTitle(options);
+  }
+
+  /**
+   * Actualiza in-situ el contenido de una nota existente en Google Drive.
+   * Si no se proporciona fileId, realiza búsqueda difusa por título/nombre y carpeta.
+   * Si la nota no existe, crea una nueva delegando a createNote.
+   */
+  async updateNote({ fileId = null, title, content, folder = null, tags = [], wikilinks = [], overwrite = true } = {}) {
     const drive = await this._getDriveClient();
     if (!drive) throw new Error('Google Drive no configurado para Obsidian');
+
+    let targetFileId = fileId;
+    let targetFolder = folder;
+    let fileName = null;
+    let webViewLink = null;
+    let canonicalTitle = null;
+
+    if (!targetFileId) {
+      const existing = await this.findNoteByNameOrTitle({ title, folder });
+      if (existing) {
+        targetFileId = existing.fileId || existing.id;
+        fileName = existing.name;
+        targetFolder = existing.folder || folder || '01_Inbox';
+        webViewLink = existing.webViewLink;
+        canonicalTitle = existing.cleanTitle || (existing.name ? existing.name.replace(/\.md$/i, '') : null);
+      } else {
+        // Delegar a createNote si no existe
+        return await this.createNote({
+          title,
+          content,
+          folder: folder || '01_Inbox',
+          tags,
+          wikilinks,
+          _skipDuplicateCheck: true,
+        });
+      }
+    } else {
+      const existing = await this.findNoteByNameOrTitle({ fileId: targetFileId });
+      if (existing) {
+        canonicalTitle = existing.cleanTitle || (existing.name ? existing.name.replace(/\.md$/i, '') : null);
+        fileName = existing.name;
+        if (!targetFolder) targetFolder = existing.folder;
+        if (!webViewLink) webViewLink = existing.webViewLink;
+      }
+    }
+
+    const targetTitle = canonicalTitle || title || (fileName ? fileName.replace(/\.md$/i, '') : 'Nota');
+    if (!fileName) {
+      const sanitizedTitle = targetTitle.replace(/[\/\\?%*:|"<>]/g, '-').trim();
+      fileName = `${sanitizedTitle}.md`;
+    }
+    if (!targetFolder) {
+      targetFolder = '01_Inbox';
+    }
+
+    const ahora = new Date();
+    const ahoraGuatemala = new Date(ahora.getTime() - 6 * 3600 * 1000).toISOString().replace('Z', '-06:00');
+
+    const tagList = Array.isArray(tags) ? tags : [];
+    const yamlTags = tagList.length > 0 ? `tags:\n${tagList.map(t => `  - ${t.replace(/^#/, '')}`).join('\n')}\n` : '';
+
+    const linksBlock = Array.isArray(wikilinks) && wikilinks.length > 0
+      ? `\n\n### 🔗 Enlaces Relacionados (Graph View)\n${wikilinks.map(l => `- [[${l.replace(/^\[\[|\]\]$/g, '')}]]`).join('\n')}`
+      : '';
+
+    let markdownBody = content;
+    if (!content.trim().startsWith('---')) {
+      markdownBody = `---
+title: "${targetTitle.replace(/"/g, '\\"')}"
+date: ${ahoraGuatemala}
+author: Carmencita
+folder: "${targetFolder}"
+${yamlTags}---
+
+# ${targetTitle}
+
+${content}${linksBlock}
+`;
+    }
+
+    const updatedFile = await drive.files.update({
+      fileId: targetFileId,
+      media: {
+        mimeType: 'text/markdown',
+        body: markdownBody,
+      },
+      fields: 'id, name, webViewLink, parents',
+    });
+
+    // Invalidar caché del Vault tras actualización exitosa
+    this._vaultCache.timestamp = 0;
+
+    const result = {
+      fileId: targetFileId,
+      fileName: updatedFile?.data?.name || fileName,
+      folder: targetFolder,
+      webViewLink: updatedFile?.data?.webViewLink || webViewLink,
+      rawContent: markdownBody,
+      updated: true,
+    };
+
+    // Re-indexar automáticamente el nuevo contenido en SemanticMemory mediante indexNoteContentToVector
+    const emb = this.embeddingService;
+    if (emb && typeof emb.saveMemory === 'function') {
+      const prismaClient = emb.prisma || this.prisma;
+      if (prismaClient && typeof prismaClient.$executeRawUnsafe === 'function') {
+        try {
+          await prismaClient.$executeRawUnsafe(
+            `DELETE FROM "SemanticMemory" WHERE category = 'OBSIDIAN' AND metadata->>'fileId' = $1`,
+            targetFileId
+          );
+        } catch {}
+      }
+
+      this.indexNoteContentToVector({
+        fileId: result.fileId,
+        name: result.fileName,
+        folder: targetFolder,
+        content: markdownBody,
+        embeddingService: emb,
+      }).catch((err) => console.warn('[ObsidianDriveService RAG] Error re-indexando nota actualizada:', err.message));
+    }
+
+    return result;
+  }
+
+  async createNote({ title, content, folder = '01_Inbox', tags = [], wikilinks = [], _skipDuplicateCheck = false }) {
+    const drive = await this._getDriveClient();
+    if (!drive) throw new Error('Google Drive no configurado para Obsidian');
+
+    // Antes de llamar a drive.files.create(), buscar si ya existe una nota con el mismo nombre normalizado en la carpeta destino
+    if (!_skipDuplicateCheck) {
+      const existing = await this.findNoteByNameOrTitle({ title, folder });
+      if (existing) {
+        return await this.updateNote({
+          fileId: existing.fileId || existing.id,
+          title,
+          content,
+          folder: existing.folder || folder,
+          tags,
+          wikilinks,
+          overwrite: true,
+        });
+      }
+    }
 
     const targetFolderId = await this.getOrCreateSubfolder(folder);
 
