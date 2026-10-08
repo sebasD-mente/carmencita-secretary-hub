@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { prisma as defaultPrisma } from '../core/prisma.js';
 import { defaultObsidianDriveService } from './obsidian-drive.service.js';
 import { defaultGmailService } from './gmail.service.js';
@@ -17,19 +18,26 @@ export function sanitizeLogLine(line) {
 
 export class DiagnosticsService {
   constructor({
-    prisma = null,
-    obsidianService = null,
-    gmailService = null,
-    calendarService = null,
-    googleTasksService = null,
-    logFilePath = process.env.PM2_ERROR_LOG_PATH || '/root/.pm2/logs/carmencita-hub-error.log',
+    prisma,
+    obsidianService,
+    gmailService,
+    calendarService,
+    googleTasksService,
+    logFilePath,
   } = {}) {
     this.prisma = prisma || defaultPrisma;
-    this.obsidianService = obsidianService !== undefined ? obsidianService : defaultObsidianDriveService;
-    this.gmailService = gmailService !== undefined ? gmailService : defaultGmailService;
-    this.calendarService = calendarService !== undefined ? calendarService : defaultCalendarService;
-    this.googleTasksService = googleTasksService !== undefined ? googleTasksService : defaultGoogleTasksService;
-    this.logFilePath = logFilePath;
+    this.obsidianService = obsidianService || defaultObsidianDriveService;
+    this.gmailService = gmailService || defaultGmailService;
+    this.calendarService = calendarService || defaultCalendarService;
+    this.googleTasksService = googleTasksService || defaultGoogleTasksService;
+
+    if (logFilePath) {
+      this.logFilePath = logFilePath;
+    } else if (fsSync.existsSync('/root/.pm2/logs/carmencita-hub-error-0.log')) {
+      this.logFilePath = '/root/.pm2/logs/carmencita-hub-error-0.log';
+    } else {
+      this.logFilePath = process.env.PM2_ERROR_LOG_PATH || '/root/.pm2/logs/carmencita-hub-error.log';
+    }
   }
 
   async getRecentErrorLogs(maxLines = 5) {
@@ -69,14 +77,25 @@ export class DiagnosticsService {
       this.obsidianService && (this.obsidianService.refreshToken || this.obsidianService.driveClient)
     );
     const gmailOk = Boolean(
-      this.gmailService && (this.gmailService.refreshToken || this.gmailService.gmailClient)
+      this.gmailService && (
+        typeof this.gmailService.isConfigured === 'function'
+          ? this.gmailService.isConfigured()
+          : (this.gmailService.refreshToken || this.gmailService.gmailClient)
+      )
     );
     const calendarOk = Boolean(
-      this.calendarService && (this.calendarService.refreshToken || this.calendarService.calendarClient)
+      this.calendarService && (
+        typeof this.calendarService.isConfigured === 'function'
+          ? this.calendarService.isConfigured()
+          : (this.calendarService.refreshToken || this.calendarService.calendarClient)
+      )
     );
     const tasksOk = Boolean(
-      this.googleTasksService &&
-      (typeof this.googleTasksService.isConfigured === 'function' ? this.googleTasksService.isConfigured() : true)
+      this.googleTasksService && (
+        typeof this.googleTasksService.isConfigured === 'function'
+          ? this.googleTasksService.isConfigured()
+          : true
+      )
     );
 
     return {
