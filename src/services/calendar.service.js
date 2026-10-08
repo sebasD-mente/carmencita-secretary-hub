@@ -171,6 +171,60 @@ export class CalendarService {
 
     return await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
   }
+
+  async rescheduleEvent({ eventId = null, query = null, newStartDateTime, newEndDateTime = null, calendarId = 'primary', timeZone = 'America/Guatemala' }) {
+    const calendar = await this._getCalendarClient();
+    if (!calendar) throw new Error('Google Calendar no configurado');
+
+    let targetEventId = eventId;
+    if (!targetEventId && query) {
+      const upcoming = await this.listUpcomingEvents({ maxResults: 15, calendarId });
+      const found = upcoming.find((e) => e.summary.toLowerCase().includes(query.toLowerCase()));
+      if (found) targetEventId = found.id;
+    }
+
+    if (!targetEventId) throw new Error(`Evento no encontrado${query ? `: "${query}"` : ''}`);
+
+    let endIso = newEndDateTime;
+    if (!endIso) {
+      const start = new Date(newStartDateTime);
+      endIso = new Date(start.getTime() + 60 * 60 * 1000).toISOString();
+    }
+
+    const res = await calendar.events.patch({
+      calendarId,
+      eventId: targetEventId,
+      requestBody: {
+        start: { dateTime: new Date(newStartDateTime).toISOString(), timeZone },
+        end: { dateTime: new Date(endIso).toISOString(), timeZone },
+      },
+    });
+
+    return {
+      id: res.data.id,
+      summary: res.data.summary,
+      start: res.data.start?.dateTime,
+      end: res.data.end?.dateTime,
+      htmlLink: res.data.htmlLink,
+    };
+  }
+
+  async cancelEvent({ eventId = null, query = null, calendarId = 'primary' }) {
+    const calendar = await this._getCalendarClient();
+    if (!calendar) throw new Error('Google Calendar no configurado');
+
+    let targetEventId = eventId;
+    if (!targetEventId && query) {
+      const upcoming = await this.listUpcomingEvents({ maxResults: 15, calendarId });
+      const found = upcoming.find((e) => e.summary.toLowerCase().includes(query.toLowerCase()));
+      if (found) targetEventId = found.id;
+    }
+
+    if (!targetEventId) throw new Error(`Evento no encontrado${query ? `: "${query}"` : ''}`);
+
+    await calendar.events.delete({ calendarId, eventId: targetEventId });
+    return { success: true, eventId: targetEventId };
+  }
 }
 
 export const defaultCalendarService = new CalendarService();

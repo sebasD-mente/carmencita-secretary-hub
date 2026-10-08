@@ -35,6 +35,13 @@ import {
   GenerateQrActionSchema,
   SendMediaActionSchema,
   SendVoiceActionSchema,
+  ReadObsidianNoteActionSchema,
+  AppendObsidianNoteActionSchema,
+  CompleteTaskActionSchema,
+  CancelTaskActionSchema,
+  ListTasksActionSchema,
+  RescheduleCalendarEventActionSchema,
+  CancelCalendarEventActionSchema,
   parseCarmencitaAction,
 } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
@@ -167,6 +174,19 @@ class MockPrismaClient {
       },
       findUnique: async ({ where }) => {
         return this._data.tasks.find((t) => t.id === where.id) || null;
+      },
+      findFirst: async ({ where = {}, orderBy = {} } = {}) => {
+        let res = [...this._data.tasks];
+        if (where.description?.contains) {
+          const q = where.description.contains.toLowerCase();
+          res = res.filter((t) => (t.description || '').toLowerCase().includes(q));
+        }
+        if (where.status?.in) {
+          res = res.filter((t) => where.status.in.includes(t.status));
+        } else if (where.status) {
+          res = res.filter((t) => t.status === where.status);
+        }
+        return res[0] || null;
       },
       update: async ({ where, data }) => {
         const item = this._data.tasks.find((t) => t.id === where.id);
@@ -3669,6 +3689,418 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     }
 
     assert.equal(savedMemories.length, 1, 'No debe guardar recuerdos para charlas casuales o saludos');
+  });
+
+  await t.test('42. Lectura y Anexo en Obsidian Vault (READ_OBSIDIAN_NOTE y APPEND_OBSIDIAN_NOTE)', async () => {
+    // 0. Validación de Esquemas Zod
+    const validReadAction = {
+      action: 'READ_OBSIDIAN_NOTE',
+      title: 'Plan de Stands 2026',
+      folder: '02_Projects',
+    };
+    const parsedRead = parseCarmencitaAction(validReadAction);
+    assert.ok(parsedRead, 'READ_OBSIDIAN_NOTE debe ser validado por Zod');
+    assert.equal(parsedRead.action, 'READ_OBSIDIAN_NOTE');
+    assert.equal(parsedRead.title, 'Plan de Stands 2026');
+    assert.equal(parsedRead.folder, '02_Projects');
+
+    // Validación de error cuando title está vacío
+    assert.equal(parseCarmencitaAction({ action: 'READ_OBSIDIAN_NOTE', title: '' }), null);
+
+    const validAppendAction = {
+      action: 'APPEND_OBSIDIAN_NOTE',
+      title: 'Plan de Stands 2026',
+      content: '## Anexo de Materiales\n- Madera de pino tratada y reflectores 3000K',
+      folder: '02_Projects',
+    };
+    const parsedAppend = parseCarmencitaAction(validAppendAction);
+    assert.ok(parsedAppend, 'APPEND_OBSIDIAN_NOTE debe ser validado por Zod');
+    assert.equal(parsedAppend.action, 'APPEND_OBSIDIAN_NOTE');
+    assert.equal(parsedAppend.title, 'Plan de Stands 2026');
+    assert.ok(parsedAppend.content.includes('Madera de pino'));
+
+    // Validación de error cuando content está vacío
+    assert.equal(parseCarmencitaAction({ action: 'APPEND_OBSIDIAN_NOTE', title: 'Plan', content: '' }), null);
+
+    // 1. Prueba unitaria de ObsidianDriveService.appendToNote con cliente Drive mockeado
+    let updatedFilePayload = null;
+    const initialNoteContent = '# Plan de Stands 2026\n\nDistribución modular básica.';
+    const mockDrive = {
+      files: {
+        get: async () => ({ data: initialNoteContent }),
+        update: async ({ fileId, media, fields }) => {
+          updatedFilePayload = { fileId, body: media.body, fields };
+          return {
+            data: {
+              id: fileId,
+              name: 'Plan de Stands 2026.md',
+              webViewLink: 'https://drive.google.com/file/d/test123/view',
+            },
+          };
+        },
+      },
+    };
+
+    const obsidianService = new ObsidianDriveService({ driveClient: mockDrive });
+    const appendResult = await obsidianService.appendToNote({
+      fileId: 'file_stands_123',
+      name: 'Plan de Stands 2026',
+      contentToAppend: '## Anexo de Iluminación\n- Tiras LED 3000K de alta eficiencia.',
+    });
+
+    assert.ok(appendResult, 'appendToNote debe retornar resultado');
+    assert.equal(appendResult.fileId, 'file_stands_123');
+    assert.equal(appendResult.fileName, 'Plan de Stands 2026.md');
+    assert.ok(appendResult.content.includes('Distribución modular básica.'));
+    assert.ok(appendResult.content.includes('## Anexo de Iluminación'));
+    assert.ok(updatedFilePayload, 'files.update debió ser invocado');
+    assert.equal(updatedFilePayload.fileId, 'file_stands_123');
+    assert.ok(updatedFilePayload.body.includes('Tiras LED 3000K'));
+
+    // 2. Integración agéntica de CarmencitaBrain con READ_OBSIDIAN_NOTE y síntesis ejecutiva
+    let capturedSynthesisPrompt = null;
+    const mockAiObsidian = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          // Si es la fase de síntesis agéntica de resultados:
+          if (promptStr.includes('Ejecutaste la herramienta Obsidian Vault')) {
+            capturedSynthesisPrompt = promptStr;
+            return {
+              text: 'Sebastián querido, ya revisé a fondo tu nota de Plan de Stands 2026. El proyecto contempla distribución modular y tiras LED cálidas de 3000K. ¿Deseas que prepare la orden de compra?',
+            };
+          }
+
+          // Fase de extracción inicial de acción:
+          return {
+            text: '¡Con gusto, mi líder! Te leo la nota de inmediato.\n```json\n' +
+              JSON.stringify({
+                action: 'READ_OBSIDIAN_NOTE',
+                title: 'Plan de Stands 2026',
+                folder: '02_Projects',
+              }) +
+              '\n```',
+          };
+        },
+      },
+    };
+
+    const mockObsidianService = {
+      readNote: async ({ name }) => ({
+        fileId: 'file_stands_123',
+        fileName: `${name}.md`,
+        content: '# Plan de Stands 2026\n\nDistribución modular y tiras LED cálidas de 3000K.',
+      }),
+      appendToNote: async ({ name, contentToAppend }) => ({
+        fileId: 'file_stands_123',
+        fileName: `${name}.md`,
+        content: `# ${name}\n\nContenido base.\n\n${contentToAppend}\n`,
+        webViewLink: 'https://drive.google.com/file/d/test123/view',
+      }),
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiObsidian,
+      obsidianService: mockObsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const readResponse = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Léeme la nota de Plan de Stands 2026',
+    });
+
+    assert.equal(readResponse.hasObsidianNote, true);
+    assert.equal(readResponse.actionData.action, 'READ_OBSIDIAN_NOTE');
+    assert.ok(capturedSynthesisPrompt, 'La síntesis agéntica debió ejecutarse');
+    assert.ok(capturedSynthesisPrompt.includes('Plan de Stands 2026.md'));
+    assert.ok(readResponse.reply.includes('Sebastián querido'));
+    assert.ok(readResponse.reply.includes('distribución modular y tiras LED cálidas'));
+
+    // 3. Integración agéntica de CarmencitaBrain con APPEND_OBSIDIAN_NOTE
+    const mockAiAppend = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Por supuesto, mi Sebastián adorado! Anexo los detalles a la nota.\n```json\n' +
+            JSON.stringify({
+              action: 'APPEND_OBSIDIAN_NOTE',
+              title: 'Plan de Stands 2026',
+              folder: '02_Projects',
+              content: '- Proveedor de herrajes confirmado: Metales de Guatemala.',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brainAppend = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiAppend,
+      obsidianService: mockObsidianService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    const appendResponse = await brainAppend.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Agrega a la nota Plan de Stands 2026 el proveedor de herrajes',
+    });
+
+    assert.equal(appendResponse.hasObsidianNote, true);
+    assert.equal(appendResponse.actionData.action, 'APPEND_OBSIDIAN_NOTE');
+    assert.ok(appendResponse.reply.includes('Plan de Stands 2026'));
+    assert.ok(appendResponse.reply.includes('02_Projects'));
+  });
+
+  await t.test('43. Ciclo Completo de Tareas Nativas (COMPLETE_TASK, CANCEL_TASK y LIST_TASKS)', async () => {
+    // 0. Validación de Esquemas Zod
+    assert.ok(parseCarmencitaAction({ action: 'COMPLETE_TASK', query: 'comprar pilas' }));
+    assert.ok(parseCarmencitaAction({ action: 'CANCEL_TASK', query: 'llamar a carpintero' }));
+    assert.ok(parseCarmencitaAction({ action: 'LIST_TASKS', status: 'PENDIENTE' }));
+
+    // 1. Pruebas de servicio TaskService y GoogleTasksService
+    let completedGoogleTaskId = null;
+    let deletedGoogleTaskId = null;
+
+    const mockGoogleTasksService = {
+      isConfigured: () => true,
+      completeTask: async ({ taskId }) => {
+        completedGoogleTaskId = taskId;
+        return { id: taskId, status: 'completed' };
+      },
+      deleteTask: async ({ taskId }) => {
+        deletedGoogleTaskId = taskId;
+        return { success: true, taskId };
+      },
+    };
+
+    const testTaskService = new TaskService(mockPrisma, mockGoogleTasksService);
+
+    // Crear dos tareas con googleTaskId
+    const task1 = await mockPrisma.task.create({
+      data: {
+        description: 'Comprar pilas alcalinas AAA para el multímetro',
+        status: 'PENDIENTE',
+        priority: 'ALTA',
+        googleTaskId: 'gtask_pilas_111',
+      },
+    });
+
+    const task2 = await mockPrisma.task.create({
+      data: {
+        description: 'Cotizar flete con Transportes San José',
+        status: 'PENDIENTE',
+        priority: 'MEDIA',
+        googleTaskId: 'gtask_flete_222',
+      },
+    });
+
+    // 2. Completar tarea por palabra clave
+    const completed = await testTaskService.completeTaskByNameOrId({ query: 'pilas' });
+    assert.ok(completed, 'Debe encontrar y completar la tarea de pilas');
+    assert.equal(completed.id, task1.id);
+    assert.equal(completed.status, 'COMPLETADA');
+    assert.ok(completed.completedAt instanceof Date);
+
+    // Esperar tick para la llamada asíncrona de Google Tasks
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(completedGoogleTaskId, 'gtask_pilas_111', 'Google Tasks debe sincronizarse con completeTask');
+
+    // 3. Cancelar tarea por palabra clave
+    const cancelled = await testTaskService.cancelTaskByNameOrId({ query: 'Transportes San José' });
+    assert.ok(cancelled, 'Debe encontrar y cancelar la tarea de flete');
+    assert.equal(cancelled.id, task2.id);
+    assert.equal(cancelled.status, 'CANCELADA');
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(deletedGoogleTaskId, 'gtask_flete_222', 'Google Tasks debe sincronizarse con deleteTask');
+
+    // 4. Integración en CarmencitaBrain con Blindaje Anti-Terminal Bash
+    let terminalBridgeCalled = false;
+    const spyAgyBridge = {
+      executeTask: async () => {
+        terminalBridgeCalled = true;
+        return { success: true, output: 'bash output' };
+      },
+    };
+
+    const mockAiTask = {
+      models: {
+        generateContent: async () => ({
+          text: '¡Listo mi Sebastián querido! Di por concluida la tarea "Comprar pilas alcalinas AAA para el multímetro" en tu lista.\n```json\n' +
+            JSON.stringify({
+              action: 'COMPLETE_TASK',
+              query: 'pilas',
+            }) +
+            '\n```',
+        }),
+      },
+    };
+
+    const brainTask = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiTask,
+      taskService: testTaskService,
+      documentService,
+      ideaService,
+      excelService,
+      agyBridge: spyAgyBridge,
+    });
+
+    const brainTaskResult = await brainTask.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Marca como completada la tarea de comprar pilas',
+    });
+
+    assert.equal(brainTaskResult.hasTask, true);
+    assert.equal(brainTaskResult.actionData.action, 'COMPLETE_TASK');
+    assert.ok(brainTaskResult.reply.includes('¡Listo mi Sebastián querido!'));
+    assert.ok(brainTaskResult.reply.includes('Comprar pilas alcalinas'));
+    assert.equal(terminalBridgeCalled, false, 'Carmencita NUNCA debe invocar la terminal bash para resolver tareas de forma nativa');
+  });
+
+  await t.test('44. Reprogramación y Cancelación en Google Calendar (RESCHEDULE_CALENDAR_EVENT y CANCEL_CALENDAR_EVENT)', async () => {
+    // 0. Validación de Esquemas Zod
+    assert.ok(parseCarmencitaAction({
+      action: 'RESCHEDULE_CALENDAR_EVENT',
+      query: 'Reunión de Stand IA con Gary',
+      newStartDateTime: '2026-10-15T15:00:00-06:00',
+    }));
+    assert.ok(parseCarmencitaAction({
+      action: 'CANCEL_CALENDAR_EVENT',
+      query: 'Reunión de Stand IA con Gary',
+    }));
+    // Falla si falta newStartDateTime en reprogramación
+    assert.equal(parseCarmencitaAction({ action: 'RESCHEDULE_CALENDAR_EVENT', query: 'Reunión' }), null);
+
+    // 1. Pruebas de servicio CalendarService
+    let patchedRequestBody = null;
+    let deletedEventId = null;
+
+    const mockCalendarClient = {
+      events: {
+        list: async () => ({
+          data: {
+            items: [
+              {
+                id: 'cal_event_777',
+                summary: 'Reunión de Stand IA con Gary',
+                start: { dateTime: '2026-10-15T10:00:00-06:00' },
+                end: { dateTime: '2026-10-15T11:00:00-06:00' },
+              },
+            ],
+          },
+        }),
+        patch: async ({ eventId, requestBody }) => {
+          patchedRequestBody = { eventId, requestBody };
+          return {
+            data: {
+              id: eventId,
+              summary: 'Reunión de Stand IA con Gary',
+              start: requestBody.start,
+              end: requestBody.end,
+              htmlLink: 'https://calendar.google.com/event?eid=777',
+            },
+          };
+        },
+        delete: async ({ eventId }) => {
+          deletedEventId = eventId;
+          return { data: {} };
+        },
+      },
+    };
+
+    const testCalendarService = new CalendarService({ calendarClient: mockCalendarClient });
+
+    // 2. Reprogramar evento por búsqueda
+    const rescheduled = await testCalendarService.rescheduleEvent({
+      query: 'Stand IA',
+      newStartDateTime: '2026-10-15T15:00:00-06:00',
+    });
+
+    assert.ok(rescheduled);
+    assert.equal(rescheduled.id, 'cal_event_777');
+    assert.equal(patchedRequestBody.eventId, 'cal_event_777');
+    assert.ok(patchedRequestBody.requestBody.start.dateTime.includes('2026-10-15'));
+
+    // 3. Cancelar evento por búsqueda
+    const cancelled = await testCalendarService.cancelEvent({ query: 'Stand IA' });
+    assert.ok(cancelled.success);
+    assert.equal(deletedEventId, 'cal_event_777');
+
+    // 4. Integración en CarmencitaBrain con RESCHEDULE_CALENDAR_EVENT y CANCEL_CALENDAR_EVENT
+    const mockAiCalendar = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          if (promptStr.includes('cancela')) {
+            return {
+              text: '¡Listo mi Sebastián querido! He cancelado la cita "Reunión de Stand IA con Gary" en tu Google Calendar.\n```json\n' +
+                JSON.stringify({
+                  action: 'CANCEL_CALENDAR_EVENT',
+                  query: 'Reunión de Stand IA con Gary',
+                }) +
+                '\n```',
+            };
+          }
+          return {
+            text: '📅 ¡Cita reprogramada en tu Google Calendar!\n```json\n' +
+              JSON.stringify({
+                action: 'RESCHEDULE_CALENDAR_EVENT',
+                query: 'Reunión de Stand IA con Gary',
+                newStartDateTime: '2026-10-15T16:00:00-06:00',
+              }) +
+              '\n```',
+          };
+        },
+      },
+    };
+
+    const brainCal = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiCalendar,
+      calendarService: testCalendarService,
+      documentService,
+      taskService,
+      ideaService,
+      excelService,
+    });
+
+    // Probar reprogramación en Brain
+    const resReschedule = await brainCal.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'Mueve la reunión de Stand IA para las 4pm',
+    });
+
+    assert.equal(resReschedule.hasCalendarEvent, true);
+    assert.equal(resReschedule.actionData.action, 'RESCHEDULE_CALENDAR_EVENT');
+    assert.ok(resReschedule.reply.includes('Cita reprogramada'));
+
+    // Probar cancelación en Brain
+    const resCancel = await brainCal.processTextMessage({
+      channel: 'telegram',
+      senderId: '12345',
+      senderName: 'Sebastián',
+      text: 'cancela la reunión de Stand IA con Gary',
+    });
+
+    assert.equal(resCancel.hasCalendarEvent, true);
+    assert.equal(resCancel.actionData.action, 'CANCEL_CALENDAR_EVENT');
+    assert.ok(resCancel.reply.includes('cancelado la cita'));
   });
 
   // Limpieza final

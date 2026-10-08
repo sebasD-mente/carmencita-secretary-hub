@@ -414,6 +414,31 @@ ${content}${linksBlock}
       content: typeof res.data === 'string' ? res.data : JSON.stringify(res.data),
     };
   }
+
+  async appendToNote({ fileId = null, name = null, folder = null, contentToAppend }) {
+    const drive = await this._getDriveClient();
+    if (!drive) throw new Error('Google Drive no configurado para Obsidian');
+
+    const existing = await this.readNote({ fileId, name, folder });
+    const updatedContent = `${existing.content.trimEnd()}\n\n${contentToAppend}\n`;
+
+    const res = await drive.files.update({
+      fileId: existing.fileId,
+      media: {
+        mimeType: 'text/markdown',
+        body: updatedContent,
+      },
+      fields: 'id, name, webViewLink',
+    });
+
+    this._vaultCache.timestamp = 0;
+    return {
+      fileId: res.data?.id || existing.fileId,
+      fileName: res.data?.name || existing.fileName,
+      content: updatedContent,
+      webViewLink: res.data?.webViewLink,
+    };
+  }
 }
 
 export const defaultObsidianDriveService = new ObsidianDriveService();

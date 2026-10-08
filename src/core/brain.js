@@ -39,6 +39,9 @@ function makeActionResult(opts) {
     obsidianNotes: opts.obsidianNotes || null,
     hasGmailEmails: opts.hasGmailEmails || false,
     gmailEmails: opts.gmailEmails || null,
+    hasTask: opts.hasTask || false,
+    task: opts.task || null,
+    tasks: opts.tasks || null,
     fullHistoryText: opts.fullHistoryText || opts.reply,
     actionData: opts.actionData || null,
     initialAck: opts.initialAck || null,
@@ -133,6 +136,12 @@ DIRECTIVA DE TIEMPO Y PROGRAMACIÓN DE RECORDATORIOS (SAVE_TASK):
 - Cuando Sebastián mencione tiempos relativos ("en 2 horas", "en 30 minutos", "a las 5:00 PM", "mañana a las 9am"), calcula matemáticamente la fecha y hora exacta absoluta.
 - Emite SIEMPRE el campo "due" o "dueDate" en formato ISO 8601 completo: "YYYY-MM-DDTHH:mm:ss".
 - PROHIBIDO emitir cadenas vacías "" en "due" para tareas con horario programado.
+- Para crear una nueva tarea: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
+- Para completar una tarea pendiente: {"action": "COMPLETE_TASK", "query": "descripción o palabras clave de la tarea", "id": "opcional"}
+- Para cancelar o borrar una tarea: {"action": "CANCEL_TASK", "query": "descripción de la tarea", "id": "opcional"}
+- Para consultar tareas pendientes o hechas: {"action": "LIST_TASKS", "status": "PENDIENTE|COMPLETADA|TODAS"}
+- DIRECTIVA TAXATIVA ANTI-TERMINAL PARA TAREAS:
+  Carmencita NUNCA debe emitir RUN_AGY_TASK para completar, buscar o cancelar tareas; debe usar siempre COMPLETE_TASK, CANCEL_TASK o LIST_TASKS.
 
 MEMORIA PERMANENTE Y APRENDIZAJE CONTINUO:
 - Tienes acceso a recuerdos recuperados de conversaciones pasadas (RAG). Utilízalos naturalmente sin decir "según mi base de datos".
@@ -146,7 +155,7 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
   • 01_Inbox: Borradores, notas rápidas e ideas entrantes sin clasificar.
   • 02_Projects: Proyectos activos de Deko Labs (STAND IA, Web Deco Vintage, DeKo Labs Web, Carmencita Hub, Laboratorio Vision).
   • 03_Areas: Áreas de negocio continuas (Deco Vintage Tienda de Posters).
-- Cuando Sebastián te pida guardar una nota, registrar una idea creativa, acta de reunión, apunte de diseño, ficha de proveedor o concepto duradero para Obsidian (o cuando detectes que una propuesta conceptual debe guardarse en su segundo cerebro), emite la acción estructurada:
+- Cuando Sebastián te pida guardar una nota nueva, registrar una idea creativa, acta de reunión, apunte de diseño, ficha de proveedor o concepto duradero para Obsidian, emite:
   {
     "action": "SAVE_OBSIDIAN_NOTE",
     "title": "Título conciso y descriptivo",
@@ -155,11 +164,15 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
     "wikilinks": ["Deko Labs", "Sebastián Jiménez", "Feria del Mueble"],
     "content": "Cuerpo completo de la nota estructurado en Markdown con subtítulos y callouts ejecutivos"
   }
+- Cuando Sebastián te pida leer o consultar el contenido completo de una nota existente en Obsidian:
+  {"action": "READ_OBSIDIAN_NOTE", "title": "nombre o título de la nota", "folder": "opcional"}
+- Cuando Sebastián te pida agregar, anexar o complementar una nota existente en Obsidian:
+  {"action": "APPEND_OBSIDIAN_NOTE", "title": "título", "content": "texto a agregar", "folder": "opcional"}
 - DIRECTIVA DE BÚSQUEDA PANORÁMICA:
   Cuando Sebastián pregunte de forma general qué notas tiene, pida un resumen de su bóveda o un reporte general de Obsidian, emite SEARCH_OBSIDIAN_NOTES con query: "" (cadena vacía) y maxResults: 20 para traer el panorama completo.
 - BLINDAJE TAXATIVO ANTI-AGY:
-  PROHIBIDO terminantemente emitir RUN_AGY_TASK para consultar, listar o buscar notas en Obsidian. Carmencita NUNCA debe enviar comandos de terminal para resolver tareas de su Segundo Cerebro; debe usar siempre SEARCH_OBSIDIAN_NOTES o SAVE_OBSIDIAN_NOTE a través de su propio conector.
-- Cuando Sebastián te pida buscar notas existentes en su bóveda de Obsidian, emite la acción estructurada:
+  PROHIBIDO terminantemente emitir RUN_AGY_TASK para consultar, listar o buscar notas en Obsidian. Carmencita NUNCA debe enviar comandos de terminal para resolver tareas de su Segundo Cerebro; debe usar siempre SEARCH_OBSIDIAN_NOTES, READ_OBSIDIAN_NOTE, APPEND_OBSIDIAN_NOTE o SAVE_OBSIDIAN_NOTE a través de su propio conector.
+- Cuando Sebastián te pida buscar notas existentes en su bóveda de Obsidian:
   {
     "action": "SEARCH_OBSIDIAN_NOTES",
     "query": "término o título a buscar (o vacío para panorama completo)",
@@ -167,6 +180,12 @@ BÓVEDA DE CONOCIMIENTO Y OBSIDIAN (SEGUNDO CEREBRO):
     "maxResults": 20
   }
 - Carmencita vinculará automáticamente las entidades clave en wikilinks [[...]] para nutrir el Grafo de Conocimiento (Graph View) de Obsidian.
+
+GOOGLE CALENDAR & GESTIÓN DE CITAS:
+- Para agendar nueva cita: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
+- Para consultar agenda: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
+- Para reprogramar o mover una cita existente: {"action": "RESCHEDULE_CALENDAR_EVENT", "query": "nombre del evento", "newStartDateTime": "YYYY-MM-DDTHH:mm:ss"}
+- Para cancelar o borrar una cita: {"action": "CANCEL_CALENDAR_EVENT", "query": "nombre del evento"}
 
 GMAIL & CORREO ELECTRÓNICO:
 - Si Sebastián te pide revisar sus correos generales de la bandeja de entrada, emite:
@@ -179,13 +198,20 @@ ACCIONES ESTRUCTURADAS DISPONIBLES (colocar al final de tu respuesta):
 - Tarea técnica en servidor: {"action": "RUN_AGY_TASK", "prompt": "instrucción técnica precisa"}
 - Hoja de cálculo Excel: {"action": "GENERATE_EXCEL", "title": "Título", "sheetName": "Datos", "columns": [{"header": "Columna", "key": "col1"}], "rows": [{"col1": "Valor"}], "summary": "Nota"}
 - Idea estratégica: {"action": "SAVE_IDEA", "title": "Título", "summary": "Resumen ejecutivo", "priority": "ALTA|MEDIA|BAJA", "tags": ["tag1"]}
-- Tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
+- Crear tarea/recordatorio: {"action": "SAVE_TASK", "description": "Descripción", "due": "YYYY-MM-DDTHH:mm:ss", "priority": "ALTA|MEDIA|BAJA"}
+- Completar tarea pendiente: {"action": "COMPLETE_TASK", "query": "descripción de la tarea", "id": "opcional"}
+- Cancelar o borrar tarea: {"action": "CANCEL_TASK", "query": "descripción de la tarea", "id": "opcional"}
+- Consultar tareas: {"action": "LIST_TASKS", "status": "PENDIENTE|COMPLETADA|TODAS"}
 - Guardar memoria duradera en bóveda semántica: {"action": "SAVE_MEMORY", "content": "resumen claro del hecho o preferencia", "category": "PREFERENCIA|ACUERDO|PROVEEDOR|DIRECTIVA|GENERAL"}
 - Guardar nota en Obsidian Vault (Segundo Cerebro): {"action": "SAVE_OBSIDIAN_NOTE", "title": "Título", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|General", "tags": ["tag1"], "wikilinks": ["Entidad1"], "content": "Contenido en Markdown"}
+- Leer nota en Obsidian: {"action": "READ_OBSIDIAN_NOTE", "title": "nombre o título de la nota", "folder": "opcional"}
+- Anexar a nota en Obsidian: {"action": "APPEND_OBSIDIAN_NOTE", "title": "título", "content": "texto a agregar", "folder": "opcional"}
 - Buscar notas en Obsidian Vault: {"action": "SEARCH_OBSIDIAN_NOTES", "query": "término o vacío para reporte general", "folder": "01_Inbox|02_Projects|03_Areas|00_Meta|opcional", "maxResults": 20}
-- Consultar bandeja o buscar correos en Gmail: {"action": "CHECK_GMAIL", "query": "términos clave o vacío para bandeja general", "maxResults": 5, "onlyImportant": false}
-- Agendar evento en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
+- Agendar cita en Google Calendar: {"action": "CREATE_CALENDAR_EVENT", "summary": "Título del evento", "startDateTime": "YYYY-MM-DDTHH:mm:ss", "endDateTime": "YYYY-MM-DDTHH:mm:ss", "description": "Detalles", "location": "Ubicación"}
 - Consultar agenda en Google Calendar: {"action": "LIST_CALENDAR_EVENTS", "range": "TODAY|TOMORROW|UPCOMING"}
+- Reprogramar cita en Calendar: {"action": "RESCHEDULE_CALENDAR_EVENT", "query": "nombre del evento", "newStartDateTime": "YYYY-MM-DDTHH:mm:ss"}
+- Cancelar o borrar cita en Calendar: {"action": "CANCEL_CALENDAR_EVENT", "query": "nombre del evento"}
+- Consultar bandeja o buscar correos en Gmail: {"action": "CHECK_GMAIL", "query": "términos clave o vacío para bandeja general", "maxResults": 5, "onlyImportant": false}
 - Guardar contacto en directorio: {"action": "SAVE_CONTACT", "name": "Nombre", "role": "Cargo", "phone": "12345678", "email": "correo@ejemplo.com", "company": "Empresa", "notes": "Notas"}
 - Buscar contacto o teléfono: {"action": "SEARCH_CONTACT", "query": "término o nombre a buscar"}
 - Código QR oficial: {"action": "GENERATE_QR", "text": "https://...", "title": "Nombre"}
@@ -863,6 +889,117 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
       return makeActionResult({ reply: cleanText, actionData: parsedAction });
     }
 
+    if (parsedAction.action === 'COMPLETE_TASK') {
+      let task = null;
+      let taskErr = null;
+      try {
+        task = await this.taskService.completeTaskByNameOrId({
+          id: parsedAction.id || null,
+          query: parsedAction.query || null,
+        });
+      } catch (err) {
+        console.error('[Brain Task] Error completando tarea:', err.message);
+        taskErr = err.message;
+      }
+
+      let reply = '';
+      if (taskErr) {
+        reply = `⚠️ Sebastián querido, ocurrió un error al intentar completar la tarea: ${taskErr}`;
+      } else if (!task) {
+        reply = cleanText || `Sebastián querido, no encontré ninguna tarea pendiente que coincida con "${parsedAction.query || parsedAction.id || 'la búsqueda'}".`;
+      } else {
+        reply = cleanText || `¡Listo mi Sebastián querido! Di por concluida la tarea "${task.description}" en tu lista.`;
+      }
+
+      return makeActionResult({
+        reply,
+        hasTask: Boolean(task),
+        task,
+        actionData: parsedAction,
+        fullHistoryText: `${reply}\n[Tarea completada: ${task?.description || parsedAction.query || parsedAction.id || 'N/A'}]`,
+      });
+    }
+
+    if (parsedAction.action === 'CANCEL_TASK') {
+      let task = null;
+      let taskErr = null;
+      try {
+        task = await this.taskService.cancelTaskByNameOrId({
+          id: parsedAction.id || null,
+          query: parsedAction.query || null,
+        });
+      } catch (err) {
+        console.error('[Brain Task] Error cancelando tarea:', err.message);
+        taskErr = err.message;
+      }
+
+      let reply = '';
+      if (taskErr) {
+        reply = `⚠️ Sebastián querido, ocurrió un error al intentar cancelar la tarea: ${taskErr}`;
+      } else if (!task) {
+        reply = cleanText || `Sebastián querido, no encontré ninguna tarea pendiente para cancelar con "${parsedAction.query || parsedAction.id || 'la búsqueda'}".`;
+      } else {
+        reply = cleanText || `¡Listo, mi jefe querido! Cancelé la tarea "${task.description}" de tu lista.`;
+      }
+
+      return makeActionResult({
+        reply,
+        hasTask: Boolean(task),
+        task,
+        actionData: parsedAction,
+        fullHistoryText: `${reply}\n[Tarea cancelada: ${task?.description || parsedAction.query || parsedAction.id || 'N/A'}]`,
+      });
+    }
+
+    if (parsedAction.action === 'LIST_TASKS') {
+      const statusFilter = parsedAction.status === 'TODAS' ? null : (parsedAction.status || 'PENDIENTE');
+      const onlyPending = statusFilter === 'PENDIENTE';
+      let tasks = [];
+      let listErr = null;
+
+      try {
+        tasks = await this.taskService.listTasks({
+          status: statusFilter,
+          onlyPending,
+          limit: parsedAction.limit || 20,
+        });
+      } catch (err) {
+        console.error('[Brain Task] Error listando tareas:', err.message);
+        listErr = err.message;
+      }
+
+      let reply = '';
+      if (listErr) {
+        reply = `⚠️ Sebastián querido, ocurrió un detalle al consultar tus tareas: ${listErr}`;
+      } else if (tasks.length === 0) {
+        reply = cleanText || `Sebastián querido, no tienes tareas registradas${statusFilter ? ` con estado ${statusFilter.toLowerCase()}` : ''}. ¡Todo al día y en orden!`;
+      } else {
+        const dataSummary = tasks.map((t, i) =>
+          `[Tarea ${i + 1}] ID: ${t.id} | Estado: ${t.status} | Descripción: ${t.description} | Prioridad: ${t.priority || 'MEDIA'}${t.dueDate ? ` | Vencimiento: ${t.dueDate}` : ''}`
+        ).join('\n');
+
+        if (this.ai) {
+          reply = await this._synthesizeToolResults({
+            userText: context.userText || 'Consultar tareas',
+            toolName: 'Gestor de Tareas',
+            dataSummary,
+            context,
+          });
+        } else {
+          const list = tasks.map((t, i) => `${i + 1}. 📌 [${t.status}] **${t.description}** (Prioridad: ${t.priority || 'MEDIA'})`).join('\n');
+          reply = `${cleanText ? cleanText + '\n\n' : ''}📋 **Tus tareas (${statusFilter || 'PENDIENTE'} - ${tasks.length}):**\n\n${list}`;
+        }
+      }
+
+      return makeActionResult({
+        reply,
+        hasTask: tasks.length > 0,
+        tasks,
+        actionData: parsedAction,
+        fullHistoryText: `${reply}\n[Tareas consultadas (${statusFilter || 'TODAS'}): ${tasks.length} encontradas]`,
+      });
+    }
+
     if (parsedAction.action === 'SAVE_MEMORY') {
       if (this.embeddingService) {
         await this.embeddingService.saveMemory({
@@ -1007,6 +1144,109 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         hasObsidianNotes: notes.length > 0,
         obsidianNotes: notes,
         fullHistoryText: `${reply}\n[Búsqueda en Obsidian Vault: "${parsedAction.query || ''}" -> ${notes.length} notas encontradas]`,
+      });
+    }
+
+    if (parsedAction.action === 'READ_OBSIDIAN_NOTE') {
+      if (!this.obsidianService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de Obsidian en Google Drive aún no está configurado en mis variables de entorno.',
+          actionData: parsedAction,
+        });
+      }
+
+      let note = null;
+      let readErr = null;
+      try {
+        note = await this.obsidianService.readNote({
+          name: parsedAction.title,
+          folder: parsedAction.folder || null,
+        });
+      } catch (err) {
+        console.error('[Brain Obsidian] Error leyendo nota en Drive:', err.message);
+        readErr = err.message;
+      }
+
+      if (readErr || !note) {
+        const reply = `Mira Sebastián querido, no pude encontrar ni leer la nota "${parsedAction.title}" en tu Obsidian Vault: ${readErr || 'Nota no encontrada'}.`;
+        return makeActionResult({
+          reply,
+          actionData: parsedAction,
+          fullHistoryText: `${reply}\n[Lectura fallida en Obsidian: "${parsedAction.title}"]`,
+        });
+      }
+
+      const synthesis = await this._synthesizeToolResults({
+        userText: context.userText || `Léeme la nota ${parsedAction.title}`,
+        toolName: 'Obsidian Vault',
+        dataSummary: `Título de la nota: ${note.fileName || parsedAction.title}\nContenido Markdown:\n${note.content}`,
+        context,
+      });
+
+      let voiceFile = null;
+      const wantsVoice = Boolean(
+        context?.isAudio ||
+        (context?.userText && /audio|voz|escuchar|nota de voz|resumen en audio/i.test(context.userText))
+      );
+      if (wantsVoice && this.voiceService && typeof this.voiceService.synthesizeSpeech === 'function') {
+        try {
+          voiceFile = await this.voiceService.synthesizeSpeech(synthesis);
+        } catch (vErr) {
+          console.warn('[Brain Obsidian Voice] Error sintetizando audio:', vErr.message);
+        }
+      }
+
+      return makeActionResult({
+        reply: synthesis,
+        hasObsidianNote: true,
+        obsidianNote: note,
+        actionData: parsedAction,
+        hasVoice: Boolean(voiceFile),
+        voiceFile,
+        fullHistoryText: `${synthesis}\n[Nota leída de Obsidian Vault: ${note.fileName || parsedAction.title}]`,
+      });
+    }
+
+    if (parsedAction.action === 'APPEND_OBSIDIAN_NOTE') {
+      if (!this.obsidianService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de Obsidian en Google Drive aún no está configurado en mis variables de entorno.',
+          actionData: parsedAction,
+        });
+      }
+
+      let appendResult = null;
+      let appendErr = null;
+      try {
+        appendResult = await this.obsidianService.appendToNote({
+          name: parsedAction.title,
+          folder: parsedAction.folder || null,
+          contentToAppend: parsedAction.content,
+        });
+      } catch (err) {
+        console.error('[Brain Obsidian] Error anexando a nota en Drive:', err.message);
+        appendErr = err.message;
+      }
+
+      if (appendErr || !appendResult) {
+        const reply = `⚠️ Sebastián querido, no pude anexar el contenido a la nota "${parsedAction.title}" en Google Drive: ${appendErr || 'Error desconocido'}.`;
+        return makeActionResult({
+          reply,
+          actionData: parsedAction,
+        });
+      }
+
+      const noteTitle = appendResult.fileName || parsedAction.title;
+      const noteConfirmation = `\n\n📓 *Nota actualizada en Obsidian Vault:*\n📂 Carpeta: \`/${parsedAction.folder || '01_Inbox'}/${noteTitle}\`\nQuedó sincronizada de inmediato en tu bóveda.`;
+      const reply = cleanText
+        ? `${cleanText}${noteConfirmation}`
+        : `¡Listo mi Sebastián querido! He anexado la nueva información a tu nota **${noteTitle}** en Obsidian.${noteConfirmation}`;
+      return makeActionResult({
+        reply,
+        hasObsidianNote: true,
+        obsidianNote: appendResult,
+        actionData: parsedAction,
+        fullHistoryText: `${reply}\n[Contenido anexado a nota de Obsidian: ${appendResult.fileName || parsedAction.title}]`,
       });
     }
 
@@ -1212,6 +1452,84 @@ Escucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE C
         actionData: parsedAction,
         calendarEvents: events,
         fullHistoryText: `${cleanText}\n[Agenda consultada (${rangeLabel}): ${events.length} citas]`,
+      });
+    }
+
+    if (parsedAction.action === 'RESCHEDULE_CALENDAR_EVENT') {
+      if (!this.calendarService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de Google Calendar no está configurado en este entorno.',
+          actionData: parsedAction,
+        });
+      }
+
+      let eventResult = null;
+      let errorMsg = null;
+      try {
+        eventResult = await this.calendarService.rescheduleEvent({
+          eventId: parsedAction.eventId || null,
+          query: parsedAction.query || null,
+          newStartDateTime: parsedAction.newStartDateTime,
+          newEndDateTime: parsedAction.newEndDateTime || null,
+        });
+      } catch (calErr) {
+        console.error('[Brain Calendar] Error reprogramando en Google Calendar:', calErr.message);
+        errorMsg = calErr.message;
+      }
+
+      let calendarReply = '';
+      if (eventResult) {
+        const link = eventResult.htmlLink || 'https://calendar.google.com';
+        calendarReply = cleanText || `📅 <b>¡Cita reprogramada en tu Google Calendar!</b>\n\n` +
+          `📌 <b>Evento:</b> ${eventResult.summary}\n` +
+          `⏰ <b>Nueva Hora:</b> ${eventResult.start}\n` +
+          (eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : '') +
+          `🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
+      } else {
+        calendarReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude reprogramar la cita en Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
+      }
+
+      return makeActionResult({
+        reply: calendarReply,
+        hasCalendarEvent: Boolean(eventResult),
+        calendarEvent: eventResult,
+        actionData: parsedAction,
+        fullHistoryText: `${calendarReply}\n[Evento reprogramado en Google Calendar: ${eventResult?.summary || parsedAction.query || parsedAction.eventId}]`,
+      });
+    }
+
+    if (parsedAction.action === 'CANCEL_CALENDAR_EVENT') {
+      if (!this.calendarService) {
+        return makeActionResult({
+          reply: '⚠️ Sebastián querido, el servicio de Google Calendar no está configurado en este entorno.',
+          actionData: parsedAction,
+        });
+      }
+
+      let cancelResult = null;
+      let errorMsg = null;
+      try {
+        cancelResult = await this.calendarService.cancelEvent({
+          eventId: parsedAction.eventId || null,
+          query: parsedAction.query || null,
+        });
+      } catch (calErr) {
+        console.error('[Brain Calendar] Error cancelando cita en Google Calendar:', calErr.message);
+        errorMsg = calErr.message;
+      }
+
+      let calendarReply = '';
+      if (cancelResult) {
+        calendarReply = cleanText || `¡Listo mi Sebastián querido! He cancelado la cita "${parsedAction.query || parsedAction.eventId}" en tu Google Calendar.`;
+      } else {
+        calendarReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude cancelar la cita en Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
+      }
+
+      return makeActionResult({
+        reply: calendarReply,
+        hasCalendarEvent: Boolean(cancelResult),
+        actionData: parsedAction,
+        fullHistoryText: `${calendarReply}\n[Evento cancelado en Google Calendar: ${parsedAction.query || parsedAction.eventId}]`,
       });
     }
 

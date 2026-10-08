@@ -179,6 +179,71 @@ export class TaskService {
       where: { id },
     });
   }
+
+  /**
+   * Completa una tarea por su ID o buscando por coincidencia en la descripción.
+   */
+  async completeTaskByNameOrId({ id = null, query = null }) {
+    let task = null;
+    if (id) {
+      task = await this.prisma.task.findUnique({ where: { id } });
+    } else if (query) {
+      task = await this.prisma.task.findFirst({
+        where: {
+          description: { contains: query, mode: 'insensitive' },
+          status: { in: ['PENDIENTE', 'EN_PROGRESO'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    if (!task) return null;
+
+    const updated = await this.prisma.task.update({
+      where: { id: task.id },
+      data: { status: 'COMPLETADA', completedAt: new Date() },
+    });
+
+    // Sincronización con Google Tasks si existe googleTaskId
+    if (task.googleTaskId && this.googleTasksService?.isConfigured?.()) {
+      this.googleTasksService.completeTask({ taskId: task.googleTaskId })
+        .catch((err) => console.warn('[TaskService] Error completando en Google Tasks:', err.message));
+    }
+
+    return updated;
+  }
+
+  /**
+   * Cancela una tarea por su ID o buscando por coincidencia en la descripción.
+   */
+  async cancelTaskByNameOrId({ id = null, query = null }) {
+    let task = null;
+    if (id) {
+      task = await this.prisma.task.findUnique({ where: { id } });
+    } else if (query) {
+      task = await this.prisma.task.findFirst({
+        where: {
+          description: { contains: query, mode: 'insensitive' },
+          status: { in: ['PENDIENTE', 'EN_PROGRESO'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    if (!task) return null;
+
+    const updated = await this.prisma.task.update({
+      where: { id: task.id },
+      data: { status: 'CANCELADA' },
+    });
+
+    if (task.googleTaskId && this.googleTasksService?.isConfigured?.()) {
+      this.googleTasksService.deleteTask({ taskId: task.googleTaskId })
+        .catch((err) => console.warn('[TaskService] Error eliminando en Google Tasks:', err.message));
+    }
+
+    return updated;
+  }
 }
 
 export const taskService = new TaskService();

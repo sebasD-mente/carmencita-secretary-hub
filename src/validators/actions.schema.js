@@ -192,6 +192,51 @@ export const SendVoiceActionSchema = z.object({
   message: z.string().min(1, 'El mensaje de voz es obligatorio'),
 });
 
+export const ReadObsidianNoteActionSchema = z.object({
+  action: z.literal('READ_OBSIDIAN_NOTE'),
+  title: z.string().min(1, 'El título de la nota es obligatorio'),
+  folder: z.string().optional().nullable(),
+});
+
+export const AppendObsidianNoteActionSchema = z.object({
+  action: z.literal('APPEND_OBSIDIAN_NOTE'),
+  title: z.string().min(1, 'El título de la nota es obligatorio'),
+  content: z.string().min(1, 'El contenido a anexar es obligatorio'),
+  folder: z.string().optional().nullable(),
+});
+
+export const CompleteTaskActionSchema = z.object({
+  action: z.literal('COMPLETE_TASK'),
+  query: z.string().optional().nullable(),
+  id: z.string().optional().nullable(),
+});
+
+export const CancelTaskActionSchema = z.object({
+  action: z.literal('CANCEL_TASK'),
+  query: z.string().optional().nullable(),
+  id: z.string().optional().nullable(),
+});
+
+export const ListTasksActionSchema = z.object({
+  action: z.literal('LIST_TASKS'),
+  status: z.enum(['PENDIENTE', 'COMPLETADA', 'TODAS']).optional().default('PENDIENTE'),
+  limit: z.number().optional().default(20),
+});
+
+export const RescheduleCalendarEventActionSchema = z.object({
+  action: z.literal('RESCHEDULE_CALENDAR_EVENT'),
+  query: z.string().optional().nullable(),
+  eventId: z.string().optional().nullable(),
+  newStartDateTime: z.string().min(1, 'La nueva fecha y hora de inicio es obligatoria'),
+  newEndDateTime: z.string().optional().nullable(),
+});
+
+export const CancelCalendarEventActionSchema = z.object({
+  action: z.literal('CANCEL_CALENDAR_EVENT'),
+  query: z.string().optional().nullable(),
+  eventId: z.string().optional().nullable(),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -208,6 +253,13 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   GenerateQrActionSchema,
   SendMediaActionSchema,
   SendVoiceActionSchema,
+  ReadObsidianNoteActionSchema,
+  AppendObsidianNoteActionSchema,
+  CompleteTaskActionSchema,
+  CancelTaskActionSchema,
+  ListTasksActionSchema,
+  RescheduleCalendarEventActionSchema,
+  CancelCalendarEventActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {

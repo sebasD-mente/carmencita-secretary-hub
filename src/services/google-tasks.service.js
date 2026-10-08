@@ -93,6 +93,27 @@ export class GoogleTasksService {
       completed: Boolean(t.completed),
     }));
   }
+
+  async completeTask({ taskId, tasklist = '@default' }) {
+    const tasks = await this._getTasksClient();
+    if (!tasks) throw new Error('Google Tasks no está configurado.');
+    const res = await tasks.tasks.patch({
+      tasklist,
+      task: taskId,
+      requestBody: { status: 'completed' },
+    });
+    return res.data;
+  }
+
+  async deleteTask({ taskId, tasklist = '@default' }) {
+    const tasks = await this._getTasksClient();
+    if (!tasks) throw new Error('Google Tasks no está configurado.');
+    await tasks.tasks.delete({
+      tasklist,
+      task: taskId,
+    });
+    return { success: true, taskId };
+  }
 }
 
 export const defaultGoogleTasksService = new GoogleTasksService();
