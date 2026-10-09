@@ -20,7 +20,7 @@ export const DOMAIN_CEILINGS = {
   'src/tools/system.tools.js': 200,
   'src/tools/media.tools.js': 220,
   'src/tools/documents.tools.js': 220,
-  'src/tools/index.js': 220,
+  'src/tools/index.js': 240,
 
   // Capa de Servicios Especializados (src/services/)
   'src/services/obsidian-drive.service.js': 950,

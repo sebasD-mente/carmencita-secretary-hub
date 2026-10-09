@@ -91,7 +91,13 @@ export function sanitizeReplyText(rawText) {
     }
     if (!closed) break;
   }
-  return cleaned.replace(/```(?:json)?\s*```/gi, '').replace(/\n{3,}/g, '\n\n').trim();
+  cleaned = cleaned.replace(/```(?:json)?\s*```/gi, '');
+  // Convertir markdown bold **texto** a <b>texto</b> para parse_mode HTML de Telegram
+  cleaned = cleaned.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  // Convertir viñetas de asterisco suelto (* item) a viñetas limpias (• item)
+  cleaned = cleaned.replace(/(^|\n)\s*\*\s+/g, '$1• ');
+  // Colapsar saltos excesivos a máximo 2 saltos (\n\n) para mantener el aire visual
+  return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**

@@ -12,6 +12,7 @@ import { TaskService } from '../src/services/task.service.js';
 import { IdeaService } from '../src/services/idea.service.js';
 import { ExcelService } from '../src/services/excel.service.js';
 import { CarmencitaBrain } from '../src/core/brain.js';
+import { CARMENCITA_SYSTEM_PROMPT, TOOL_SYNTHESIS_PROMPT } from '../src/core/carmencita.prompt.js';
 import { TelegramAdapter } from '../src/adapters/telegram.js';
 import { WhatsAppAdapter } from '../src/adapters/whatsapp.js';
 import { registerRoutes } from '../src/routes/webhooks.js';
@@ -5500,6 +5501,43 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(listResult.reply.includes('PlaneToys Stand Setup'));
     assert.ok(listResult.reply.includes('17 oct') && listResult.reply.includes('18 oct'), 'La agenda debe reportar que abarca del 17 al 18 de octubre');
     assert.ok(listResult.reply.includes('➔'), 'La lista debe formatear con elegancia el rango multi-día');
+  });
+
+  await t.test('57. Zalamería Reactiva, Variedad de Apelativos y Estética Visual Limpia (Anti-Asteriscos y Espaciado)', async () => {
+    // 1. Validar que sanitizeReplyText transforme **texto en negrita** en <b>texto en negrita</b>
+    const rawMarkdownBold = 'Hola Sebas, aquí tienes el informe de **Deko Labs** y el evento **PlaneToys 2026**.';
+    const cleanedBold = sanitizeReplyText(rawMarkdownBold);
+    assert.equal(cleanedBold, 'Hola Sebas, aquí tienes el informe de <b>Deko Labs</b> y el evento <b>PlaneToys 2026</b>.');
+    assert.ok(!cleanedBold.includes('**'), 'No deben quedar asteriscos de negrita');
+    assert.ok(cleanedBold.includes('<b>Deko Labs</b>') && cleanedBold.includes('<b>PlaneToys 2026</b>'));
+
+    // 2. Validar que transforme viñetas de asterisco suelto (* item) en viñetas limpias (• item)
+    const rawListWithAsterisks = '📌 Mis pendientes:\n* Revisar stands\n * Aprobar cotización de madera\n* Enviar correo a PlaneToys';
+    const cleanedList = sanitizeReplyText(rawListWithAsterisks);
+    assert.ok(!cleanedList.includes('*'), 'No deben quedar asteriscos de viñetas');
+    assert.ok(cleanedList.includes('• Revisar stands'));
+    assert.ok(cleanedList.includes('• Aprobar cotización de madera'));
+    assert.ok(cleanedList.includes('• Enviar correo a PlaneToys'));
+
+    // 3. Validar preservación de separación de doble salto de línea (\n\n) y colapso de saltos excesivos (>= 3 a 2)
+    const rawExcessiveSpaced = '¡Listo mi jefe consentido!\n\n\n\n✉️ <b>Elena Morales</b>\n📌 <i>Cotización Telares</i>\nAquí está el detalle.\n\n\n¿Deseas algo más?';
+    const cleanedSpaced = sanitizeReplyText(rawExcessiveSpaced);
+    assert.ok(!cleanedSpaced.includes('\n\n\n'), 'No debe haber más de dos saltos de línea consecutivos');
+    assert.ok(cleanedSpaced.includes('¡Listo mi jefe consentido!\n\n✉️ <b>Elena Morales</b>'), 'Debe preservar el aire visual con doble salto');
+    assert.ok(cleanedSpaced.includes('Aquí está el detalle.\n\n¿Deseas algo más?'));
+
+    // 4. Validar directivas de CARMENCITA_SYSTEM_PROMPT
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('ZALAMERÍA REACTIVA Y DINAMISMO VOCAL (ESPEJO DE CONFIANZA):'), 'Debe incluir la sección de zalamería reactiva');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('PROHIBIDO repetir "Sebastián querido" como muletilla fija'), 'Debe prohibir la muletilla fija');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Sebas') && CARMENCITA_SYSTEM_PROMPT.includes('jefecito lindo') && CARMENCITA_SYSTEM_PROMPT.includes('mi jefe consentido'), 'Debe sugerir variedad de apelativos');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('ESTÉTICA VISUAL Y FORMATO DE CHAT MÓVIL (CERO VÓMITO DE TEXTO):'), 'Debe incluir directivas de formato móvil');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('CERO ASTERISCOS DE MARKDOWN'), 'Debe prohibir asteriscos en el prompt');
+
+    // 5. Validar directivas de TOOL_SYNTHESIS_PROMPT
+    const sampleSynthesis = TOOL_SYNTHESIS_PROMPT('resumen de correos', 'Gmail', '[Correo 1] De: Proveedor | Asunto: Cotización');
+    assert.ok(sampleSynthesis.includes('zalamería reactiva al tono de Sebastián'), 'Debe exigir zalamería reactiva');
+    assert.ok(sampleSynthesis.includes('FORMATO VISUAL CON AIRE (CERO TEXTO AMONTONADO)'), 'Debe requerir aire visual');
+    assert.ok(sampleSynthesis.includes('CERO ASTERISCOS DE MARKDOWN'), 'Debe exigir cero asteriscos en la síntesis');
   });
 
   // Limpieza final
