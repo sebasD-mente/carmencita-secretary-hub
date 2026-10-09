@@ -25,7 +25,7 @@ export class CarmencitaBrain {
     }
 
     this.ai = deps?.ai || null;
-    if (!this.ai && config.ai.geminiApiKey) {
+    if (!this.ai && config.ai.geminiApiKey && process.env.NODE_ENV !== 'test') {
       try { this.ai = new GoogleGenAI({ apiKey: config.ai.geminiApiKey }); } catch (err) { console.warn('[Brain] Could not initialize Gemini SDK:', err.message); }
     }
   }
@@ -92,8 +92,9 @@ export class CarmencitaBrain {
   async _synthesizeToolResults({ userText, toolName, dataSummary, context = {} }) {
     if (!this.ai) return `Sebastián querido, aquí tengo la información recuperada de ${toolName}:\n\n${dataSummary}`;
     try {
+      const { ahoraGuatemala } = this._getGuatemalaTimestamps();
       const response = await this._generateContentWithFailover({
-        contents: [TOOL_SYNTHESIS_PROMPT(userText, toolName, dataSummary)],
+        contents: [TOOL_SYNTHESIS_PROMPT(userText, toolName, dataSummary, ahoraGuatemala)],
         config: { systemInstruction: this.getSystemPrompt() },
       });
       return response?.text || 'Sebastián querido, ya procesé la información pero requiero confirmar un detalle contigo.';

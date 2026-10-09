@@ -1,5 +1,24 @@
 import { makeActionResult, synthesizeToolResults } from './index.js';
 
+function formatEventDates(ev) {
+  const isAllDay = ev.isAllDay || (typeof ev.start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.start));
+  if (isAllDay) {
+    const [y, m, d] = (ev.start || '').split('T')[0].split('-').map(Number);
+    const dObj = new Date(y, m - 1, d);
+    const day = dObj.toLocaleDateString('es-GT', { weekday: 'short' }), month = dObj.toLocaleDateString('es-GT', { month: 'short' });
+    return { summary: `${day}, ${d} ${month} (Todo el día)`, fallback: `📅 <b>${day}, ${d} ${month}</b> | ⏰ <i>Todo el día</i>` };
+  }
+  const d = new Date(ev.start);
+  if (!isNaN(d.getTime())) {
+    const day = d.toLocaleDateString('es-GT', { weekday: 'short', timeZone: 'America/Guatemala' });
+    const num = d.toLocaleDateString('es-GT', { day: 'numeric', timeZone: 'America/Guatemala' });
+    const month = d.toLocaleDateString('es-GT', { month: 'short', timeZone: 'America/Guatemala' });
+    const time = d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' });
+    return { summary: `${day}, ${num} ${month} a las ${time}`, fallback: `📅 <b>${day}, ${num} ${month}</b> | ⏰ <b>${time}</b>` };
+  }
+  return { summary: String(ev.start), fallback: `⏰ <b>${ev.start}</b>` };
+}
+
 /**
  * Módulo de Herramientas de Espacio de Trabajo (Gmail, Google Calendar, Tareas y Contactos).
  */
@@ -9,12 +28,10 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
 
   // ------------------- TAREAS -------------------
   if (action === 'SAVE_TASK') {
-    if (deps.taskService && typeof deps.taskService.createTask === 'function') {
+    if (deps.taskService?.createTask) {
       await deps.taskService.createTask({
-        description: parsedAction.description,
-        due: parsedAction.due,
-        dueDate: parsedAction.dueDate,
-        priority: parsedAction.priority,
+        description: parsedAction.description, due: parsedAction.due,
+        dueDate: parsedAction.dueDate, priority: parsedAction.priority,
       });
     }
     return makeActionResult({ reply: cleanText, actionData: parsedAction });
@@ -32,24 +49,13 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
       taskErr = err.message;
     }
 
-    const verb = isComplete ? 'completar' : 'cancelar';
-    const past = isComplete ? 'completada' : 'cancelada';
-    let reply = '';
-    if (taskErr) {
-      reply = `⚠️ Sebastián querido, ocurrió un error al intentar ${verb} la tarea: ${taskErr}`;
-    } else if (!task) {
-      reply = cleanText || `Sebastián querido, no encontré ninguna tarea pendiente para ${verb} con "${parsedAction.query || parsedAction.id || 'la búsqueda'}".`;
-    } else {
-      reply = cleanText || (isComplete
-        ? `¡Listo mi Sebastián querido! Di por concluida la tarea "${task.description}" en tu lista.`
-        : `¡Listo, mi jefe querido! Cancelé la tarea "${task.description}" de tu lista.`);
-    }
+    const verb = isComplete ? 'completar' : 'cancelar', past = isComplete ? 'completada' : 'cancelada';
+    const reply = taskErr ? `⚠️ Sebastián querido, ocurrió un error al intentar ${verb} la tarea: ${taskErr}`
+      : (!task ? (cleanText || `Sebastián querido, no encontré ninguna tarea pendiente para ${verb} con "${parsedAction.query || parsedAction.id || 'la búsqueda'}".`)
+      : (cleanText || (isComplete ? `¡Listo mi Sebastián querido! Di por concluida la tarea "${task.description}" en tu lista.` : `¡Listo, mi jefe querido! Cancelé la tarea "${task.description}" de tu lista.`)));
 
     return makeActionResult({
-      reply,
-      hasTask: Boolean(task),
-      task,
-      actionData: parsedAction,
+      reply, hasTask: Boolean(task), task, actionData: parsedAction,
       fullHistoryText: `${reply}\n[Tarea ${past}: ${task?.description || parsedAction.query || parsedAction.id || 'N/A'}]`,
     });
   }
@@ -184,14 +190,11 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
   if (action === 'CREATE_CALENDAR_EVENT') {
     let eventResult = null, errorMsg = null;
     try {
-      if (deps.calendarService && typeof deps.calendarService.createEvent === 'function') {
+      if (deps.calendarService?.createEvent) {
         eventResult = await deps.calendarService.createEvent({
-          summary: parsedAction.summary,
-          description: parsedAction.description,
-          startDateTime: parsedAction.startDateTime,
-          endDateTime: parsedAction.endDateTime,
-          location: parsedAction.location,
-          checkExisting: true,
+          summary: parsedAction.summary, description: parsedAction.description,
+          startDateTime: parsedAction.startDateTime, endDateTime: parsedAction.endDateTime,
+          location: parsedAction.location, checkExisting: true,
         });
       }
     } catch (calErr) {
@@ -200,14 +203,11 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
     }
 
     const link = eventResult?.htmlLink || 'https://calendar.google.com';
-    let calendarReply = '';
-    if (eventResult?.alreadyExisted) {
-      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡El espacio ya se encuentra reservado en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Fecha/Hora:</b> ${eventResult.start}\n${eventResult.location ? `📍 <b>Ubicación:</b> ${eventResult.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
-    } else if (eventResult) {
-      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡Cita agendada en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Inicio:</b> ${eventResult.start}\n${eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : ''}${parsedAction.location ? `📍 <b>Ubicación:</b> ${parsedAction.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
-    } else {
-      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude sincronizar con Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
-    }
+    const calendarReply = eventResult?.alreadyExisted
+      ? `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡El espacio ya se encuentra reservado en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Fecha/Hora:</b> ${eventResult.start}\n${eventResult.location ? `📍 <b>Ubicación:</b> ${eventResult.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`
+      : (eventResult
+        ? `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡Cita agendada en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Inicio:</b> ${eventResult.start}\n${eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : ''}${parsedAction.location ? `📍 <b>Ubicación:</b> ${parsedAction.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`
+        : `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude sincronizar con Google Calendar (${errorMsg || 'Servicio no disponible'}).`);
 
     return makeActionResult({
       reply: calendarReply,
@@ -223,32 +223,59 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
     let events = [], rangeLabel = 'de Hoy';
     if (deps.calendarService) {
       try {
-        if (range === 'TOMORROW' && typeof deps.calendarService.getTomorrowEvents === 'function') {
+        if (range === 'THIS_MONTH' || parsedAction.month) {
+          rangeLabel = 'del Mes';
+          let targetMonth = null;
+          if (parsedAction.month) {
+            const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+            const mStr = String(parsedAction.month).toLowerCase().trim();
+            const foundIdx = months.findIndex((m) => mStr.includes(m));
+            targetMonth = foundIdx !== -1 ? foundIdx : (!isNaN(parseInt(mStr, 10)) ? parseInt(mStr, 10) - 1 : null);
+          }
+          if (typeof deps.calendarService.getMonthEvents === 'function') {
+            events = await deps.calendarService.getMonthEvents({ month: targetMonth, excludeBirthdays: !parsedAction.includeBirthdays });
+          }
+        } else if (range === 'TOMORROW' && typeof deps.calendarService.getTomorrowEvents === 'function') {
           rangeLabel = 'de Mañana';
-          events = await deps.calendarService.getTomorrowEvents();
+          events = await deps.calendarService.getTomorrowEvents({ excludeBirthdays: !parsedAction.includeBirthdays });
         } else if (range === 'UPCOMING' && typeof deps.calendarService.listUpcomingEvents === 'function') {
           rangeLabel = 'Próximas Citas';
-          events = await deps.calendarService.listUpcomingEvents({ maxResults: 10 });
+          events = await deps.calendarService.listUpcomingEvents({ maxResults: 10, excludeBirthdays: !parsedAction.includeBirthdays });
         } else if (typeof deps.calendarService.getTodayEvents === 'function') {
-          events = await deps.calendarService.getTodayEvents();
+          events = await deps.calendarService.getTodayEvents({ excludeBirthdays: !parsedAction.includeBirthdays });
         }
       } catch (err) { console.error('[Brain Calendar] Error listando eventos del calendario:', err.message); }
     }
 
-    const itinerary = events.length === 0
-      ? `${cleanText ? cleanText + '\n\n' : ''}📅 <b>Agenda de Google Calendar (${rangeLabel}):</b>\n\n• No tienes citas agendadas. ¡Tiempo despejado para enfocarte!`
-      : `${cleanText ? cleanText + '\n\n' : ''}📅 <b>Agenda de Google Calendar (${rangeLabel} - ${events.length} cita${events.length === 1 ? '' : 's'}):</b>\n\n` +
-        events.map((ev, i) => {
-          let time = ev.start;
-          if (ev.start) {
-            const d = new Date(ev.start);
-            time = !isNaN(d.getTime()) ? d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' }) : ev.start;
-          }
-          return `${i + 1}. ⏰ <b>${time}</b> - <b>${ev.summary}</b>${ev.location ? ` | 📍 <i>${ev.location}</i>` : ''}${ev.htmlLink ? ` (<a href="${ev.htmlLink}">Ver</a>)` : ''}`;
-        }).join('\n');
+    const hasAi = Boolean(deps.ai || deps.brain?.ai || (deps.synthesizeToolResults && !deps.brain));
+    let reply = '';
+
+    if (hasAi) {
+      const dataSummary = events.length === 0
+        ? `Google Calendar (${rangeLabel}): No hay citas agendadas en este periodo.`
+        : events.map((ev, i) => {
+            const d = formatEventDates(ev);
+            return `[Cita ${i + 1}] Resumen: "${ev.summary}" | Fecha/Hora: ${d.summary}${ev.location ? ` | Ubicación: ${ev.location}` : ''}${ev.htmlLink ? ` | Enlace: ${ev.htmlLink}` : ''}`;
+          }).join('\n');
+
+      reply = await synthesizeToolResults(deps, {
+        userText: context.userText || `Consulta de agenda (${rangeLabel})`,
+        toolName: 'Google Calendar',
+        dataSummary,
+        context,
+      });
+    } else {
+      const fallbackList = events.map((ev, i) =>
+        `${i + 1}. ${formatEventDates(ev).fallback} - <b>${ev.summary}</b>${ev.location ? ` | 📍 <i>${ev.location}</i>` : ''}${ev.htmlLink ? ` (<a href="${ev.htmlLink}">Ver</a>)` : ''}`
+      ).join('\n');
+
+      reply = events.length === 0
+        ? `${cleanText ? cleanText + '\n\n' : ''}📅 <b>Agenda de Google Calendar (${rangeLabel}):</b>\n\n• No tienes citas agendadas. ¡Tiempo despejado para enfocarte!`
+        : `${cleanText ? cleanText + '\n\n' : ''}📅 <b>Agenda de Google Calendar (${rangeLabel} - ${events.length} citas):</b>\n\n${fallbackList}`;
+    }
 
     return makeActionResult({
-      reply: itinerary, actionData: parsedAction, calendarEvents: events,
+      reply, actionData: parsedAction, calendarEvents: events,
       fullHistoryText: `${cleanText}\n[Agenda consultada (${rangeLabel}): ${events.length} citas]`,
     });
   }
@@ -268,17 +295,11 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
       errorMsg = calErr.message;
     }
 
-    let calendarReply = '';
-    if (eventResult) {
-      if (isReschedule) {
-        const link = eventResult.htmlLink || 'https://calendar.google.com';
-        calendarReply = cleanText || `📅 <b>¡Cita reprogramada en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Nueva Hora:</b> ${eventResult.start}\n${eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
-      } else {
-        calendarReply = cleanText || `¡Listo mi Sebastián querido! He cancelado la cita "${parsedAction.query || parsedAction.eventId}" en tu Google Calendar.`;
-      }
-    } else {
-      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude ${isReschedule ? 'reprogramar la' : 'cancelar la'} cita en Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
-    }
+    const calendarReply = eventResult
+      ? (isReschedule
+        ? (cleanText || `📅 <b>¡Cita reprogramada en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Nueva Hora:</b> ${eventResult.start}\n${eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : ''}🔗 <a href="${eventResult.htmlLink || 'https://calendar.google.com'}">Ver evento en Google Calendar</a>`)
+        : (cleanText || `¡Listo mi Sebastián querido! He cancelado la cita "${parsedAction.query || parsedAction.eventId}" en tu Google Calendar.`))
+      : `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude ${isReschedule ? 'reprogramar la' : 'cancelar la'} cita en Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
 
     return makeActionResult({
       reply: calendarReply,
@@ -293,7 +314,7 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
   if (action === 'SAVE_CONTACT') {
     let contact = null;
     try {
-      if (deps.contactService && typeof deps.contactService.createOrUpdateContact === 'function') {
+      if (deps.contactService?.createOrUpdateContact) {
         contact = await deps.contactService.createOrUpdateContact({
           name: parsedAction.name, role: parsedAction.role, phone: parsedAction.phone,
           email: parsedAction.email, company: parsedAction.company, notes: parsedAction.notes,
@@ -311,7 +332,7 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
   if (action === 'SEARCH_CONTACT') {
     let contacts = [];
     try {
-      if (deps.contactService && typeof deps.contactService.searchContacts === 'function') {
+      if (deps.contactService?.searchContacts) {
         contacts = await deps.contactService.searchContacts({ query: parsedAction.query });
       }
     } catch (err) { console.error('[Brain Contact] Error buscando contactos:', err.message); }
@@ -320,17 +341,27 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
     if (contacts.length === 0) {
       reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 No encontré contactos en el directorio con el término "<b>${parsedAction.query}</b>".`;
     } else {
-      const list = contacts.map((c, i) => {
-        const role = c.role ? `(${c.role})` : '';
-        const comp = c.company ? `🏢 ${c.company}` : '';
-        let phoneLinks = '📞 Sin teléfono';
-        if (c.phone) {
-          const cleanDigits = c.phone.replace(/\D/g, '');
-          phoneLinks = `📞 <a href="tel:${c.phone}">${c.phone}</a> | 💬 <a href="https://wa.me/${cleanDigits}">WhatsApp</a>`;
-        }
-        return `${i + 1}. 👤 <b>${c.name}</b> ${role}\n   ${comp ? comp + '\n   ' : ''}${phoneLinks}${c.email ? ` | ✉️ <a href="mailto:${c.email}">${c.email}</a>` : ''}`;
-      }).join('\n\n');
-      reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 <b>Contactos encontrados para "${parsedAction.query}" (${contacts.length}):</b>\n\n${list}`;
+      const hasAi = Boolean(deps.ai || deps.brain?.ai || (deps.synthesizeToolResults && !deps.brain));
+      if (hasAi) {
+        const dataSummary = contacts.map((c, i) => {
+          const cleanPhone = c.phone ? c.phone.replace(/\D/g, '') : '';
+          const links = c.phone ? ` | Teléfono: "${c.phone}" (WhatsApp: https://wa.me/${cleanPhone}, Llamar: tel:${c.phone})` : ' | Sin teléfono';
+          return `[Contacto ${i + 1}] Nombre: "${c.name}"${c.role ? ` | Cargo: "${c.role}"` : ''}${c.company ? ` | Empresa: "${c.company}"` : ''}${links}${c.email ? ` | Email: "${c.email}"` : ''}${c.notes ? ` | Notas: "${c.notes}"` : ''}`;
+        }).join('\n');
+        reply = await synthesizeToolResults(deps, {
+          userText: context.userText || `Buscar contacto "${parsedAction.query}"`,
+          toolName: 'Directorio de Contactos',
+          dataSummary,
+          context,
+        });
+      } else {
+        const list = contacts.map((c, i) => {
+          const role = c.role ? `(${c.role})` : '', comp = c.company ? `🏢 ${c.company}` : '';
+          const phoneLinks = c.phone ? `📞 <a href="tel:${c.phone}">${c.phone}</a> | 💬 <a href="https://wa.me/${c.phone.replace(/\D/g, '')}">WhatsApp</a>` : '📞 Sin teléfono';
+          return `${i + 1}. 👤 <b>${c.name}</b> ${role}\n   ${comp ? comp + '\n   ' : ''}${phoneLinks}${c.email ? ` | ✉️ <a href="mailto:${c.email}">${c.email}</a>` : ''}`;
+        }).join('\n\n');
+        reply = `${cleanText ? cleanText + '\n\n' : ''}🔍 <b>Contactos encontrados para "${parsedAction.query}" (${contacts.length}):</b>\n\n${list}`;
+      }
     }
 
     return makeActionResult({ reply, actionData: parsedAction, contacts, fullHistoryText: `${cleanText}\n[Búsqueda de contactos: "${parsedAction.query}" -> ${contacts.length} resultados]` });

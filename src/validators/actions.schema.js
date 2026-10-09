@@ -122,8 +122,10 @@ export const CreateCalendarEventActionSchema = z.object({
 
 export const ListCalendarEventsActionSchema = z.object({
   action: z.literal('LIST_CALENDAR_EVENTS'),
-  range: z.enum(['TODAY', 'TOMORROW', 'UPCOMING']).default('TODAY'),
+  range: z.enum(['TODAY', 'TOMORROW', 'THIS_WEEK', 'THIS_MONTH', 'UPCOMING']).default('TODAY'),
   date: z.string().optional().nullable(),
+  month: z.string().optional().nullable(),
+  includeBirthdays: z.boolean().default(false),
 });
 
 export const SaveContactActionSchema = z.object({

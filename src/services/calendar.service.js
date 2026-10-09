@@ -29,14 +29,8 @@ export class CalendarService {
   }
 
   async createEvent({
-    summary,
-    description = '',
-    startDateTime,
-    endDateTime = null,
-    location = '',
-    calendarId = 'primary',
-    timeZone = 'America/Guatemala',
-    checkExisting = true,
+    summary, description = '', startDateTime, endDateTime = null, location = '',
+    calendarId = 'primary', timeZone = 'America/Guatemala', checkExisting = true,
   }) {
     const calendar = await this._getCalendarClient();
     if (!calendar) {
@@ -46,11 +40,7 @@ export class CalendarService {
     let endIso = endDateTime;
     if (!endIso) {
       const start = new Date(startDateTime);
-      if (!isNaN(start.getTime())) {
-        endIso = new Date(start.getTime() + 60 * 60 * 1000).toISOString();
-      } else {
-        endIso = startDateTime;
-      }
+      endIso = !isNaN(start.getTime()) ? new Date(start.getTime() + 60 * 60 * 1000).toISOString() : startDateTime;
     }
 
     if (checkExisting) {
@@ -63,10 +53,7 @@ export class CalendarService {
           const dayEnd = new Date(startDateObj);
           dayEnd.setHours(23, 59, 59, 999);
           existingEvents = await this.getEventsForDateRange({
-            startDate: dayStart.toISOString(),
-            endDate: dayEnd.toISOString(),
-            calendarId,
-            timeZone,
+            startDate: dayStart.toISOString(), endDate: dayEnd.toISOString(), calendarId, timeZone,
           });
         }
         if (!existingEvents || existingEvents.length === 0) {
@@ -85,11 +72,8 @@ export class CalendarService {
             const startVal = typeof existing.start === 'object' ? (existing.start?.dateTime || existing.start?.date) : existing.start;
             const endVal = typeof existing.end === 'object' ? (existing.end?.dateTime || existing.end?.date) : existing.end;
             return {
-              alreadyExisted: true,
-              id: existing.id,
-              summary: existing.summary,
-              start: startVal || startDateTime,
-              end: endVal || endIso,
+              alreadyExisted: true, id: existing.id, summary: existing.summary,
+              start: startVal || startDateTime, end: endVal || endIso,
               location: existing.location || location,
               htmlLink: existing.htmlLink || `https://calendar.google.com/calendar/event?eid=${existing.id}`,
               status: 'confirmed',
@@ -102,58 +86,65 @@ export class CalendarService {
     }
 
     const eventResource = {
-      summary,
-      description: description || undefined,
-      location: location || undefined,
-      start: {
-        dateTime: new Date(startDateTime).toISOString(),
-        timeZone,
-      },
-      end: {
-        dateTime: new Date(endIso).toISOString(),
-        timeZone,
-      },
+      summary, description: description || undefined, location: location || undefined,
+      start: { dateTime: new Date(startDateTime).toISOString(), timeZone },
+      end: { dateTime: new Date(endIso).toISOString(), timeZone },
     };
 
-    const res = await calendar.events.insert({
-      calendarId,
-      requestBody: eventResource,
-    });
-
+    const res = await calendar.events.insert({ calendarId, requestBody: eventResource });
     const event = res.data;
     return {
-      id: event.id,
-      summary: event.summary || summary,
-      start: event.start?.dateTime || startDateTime,
-      end: event.end?.dateTime || endIso,
+      id: event.id, summary: event.summary || summary,
+      start: event.start?.dateTime || startDateTime, end: event.end?.dateTime || endIso,
       htmlLink: event.htmlLink || `https://calendar.google.com/calendar/event?eid=${event.id}`,
       status: event.status || 'confirmed',
     };
   }
 
-  async listUpcomingEvents({ maxResults = 10, calendarId = 'primary', timeMin = new Date().toISOString() } = {}) {
+  async listUpcomingEvents({
+    maxResults = 10,
+    calendarId = 'primary',
+    timeMin = new Date().toISOString(),
+    timeMax = null,
+    excludeBirthdays = true,
+  } = {}) {
     const calendar = await this._getCalendarClient();
     if (!calendar) {
       return [];
     }
 
-    const res = await calendar.events.list({
+    const listParams = {
       calendarId,
       timeMin,
       maxResults,
       singleEvents: true,
       orderBy: 'startTime',
-    });
+    };
+    if (timeMax) {
+      listParams.timeMax = typeof timeMax === 'string' ? timeMax : new Date(timeMax).toISOString();
+    }
+
+    const res = await calendar.events.list(listParams);
 
     const items = res.data?.items || [];
-    return items.map((item) => ({
+    let mapped = items.map((item) => ({
       id: item.id,
       summary: item.summary || '(Sin título)',
+      isAllDay: Boolean(item.start?.date && !item.start?.dateTime),
+      eventType: item.eventType || 'default',
       start: item.start?.dateTime || item.start?.date,
       end: item.end?.dateTime || item.end?.date,
       htmlLink: item.htmlLink,
       location: item.location || null,
     }));
+
+    if (excludeBirthdays) {
+      mapped = mapped.filter(
+        (item) => item.eventType !== 'birthday' && !/cumpleaños/i.test(item.summary || '')
+      );
+    }
+
+    return mapped;
   }
 
   async getEventsForDateRange({
@@ -183,6 +174,8 @@ export class CalendarService {
       id: item.id,
       summary: item.summary || '(Sin título)',
       description: item.description || '',
+      isAllDay: Boolean(item.start?.date && !item.start?.dateTime),
+      eventType: item.eventType || 'default',
       start: item.start?.dateTime || item.start?.date,
       end: item.end?.dateTime || item.end?.date,
       location: item.location || null,
@@ -190,35 +183,43 @@ export class CalendarService {
     }));
   }
 
-  async getTodayEvents({ calendarId = 'primary', timeZone = 'America/Guatemala' } = {}) {
+  async getMonthEvents({
+    month = null,
+    year = null,
+    calendarId = 'primary',
+    timeZone = 'America/Guatemala',
+    excludeBirthdays = true,
+  } = {}) {
     const now = new Date();
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(now);
+    const targetYear = year ?? now.getFullYear();
+    const targetMonth = month !== null ? month : now.getMonth(); // 0-indexed
 
-    const startDate = new Date(`${parts}T00:00:00-06:00`);
-    const endDate = new Date(`${parts}T23:59:59.999-06:00`);
+    // Primer día del mes a las 00:00:00 en timeZone (UTC-6)
+    const startDate = new Date(Date.UTC(targetYear, targetMonth, 1, 6, 0, 0));
+    // Último día del mes a las 23:59:59 en timeZone
+    const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const endDate = new Date(Date.UTC(targetYear, targetMonth, lastDay, 29, 59, 59, 999));
 
-    return await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+    const events = await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+    if (excludeBirthdays) {
+      return events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || ''));
+    }
+    return events;
   }
 
-  async getTomorrowEvents({ calendarId = 'primary', timeZone = 'America/Guatemala' } = {}) {
-    const now = new Date();
-    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(tomorrow);
+  async getTodayEvents({ calendarId = 'primary', timeZone = 'America/Guatemala', excludeBirthdays = true } = {}) {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const startDate = new Date(`${parts}T00:00:00-06:00`), endDate = new Date(`${parts}T23:59:59.999-06:00`);
+    const events = await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+    return excludeBirthdays ? events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || '')) : events;
+  }
 
-    const startDate = new Date(`${parts}T00:00:00-06:00`);
-    const endDate = new Date(`${parts}T23:59:59.999-06:00`);
-
-    return await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+  async getTomorrowEvents({ calendarId = 'primary', timeZone = 'America/Guatemala', excludeBirthdays = true } = {}) {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
+    const startDate = new Date(`${parts}T00:00:00-06:00`), endDate = new Date(`${parts}T23:59:59.999-06:00`);
+    const events = await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
+    return excludeBirthdays ? events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || '')) : events;
   }
 
   async rescheduleEvent({ eventId = null, query = null, newStartDateTime, newEndDateTime = null, calendarId = 'primary', timeZone = 'America/Guatemala' }) {

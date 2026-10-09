@@ -49,6 +49,7 @@ import {
   SyncObsidianVaultActionSchema,
   UpdateObsidianNoteActionSchema,
   DiagnoseSystemActionSchema,
+  ListCalendarEventsActionSchema,
   parseCarmencitaAction,
 } from '../src/validators/actions.schema.js';
 import { config } from '../src/config.js';
@@ -5117,6 +5118,239 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(chainedResult.hasCalendarEvent, true, 'Debe reflejar hasCalendarEvent de la acción secundaria');
     assert.equal(chainedResult.calendarEvent.alreadyExisted, true, 'Debe reflejar que el evento ya existía');
     assert.equal(chainedResult.calendarEvent.id, 'existing_devfest_id');
+  });
+
+  await t.test('55. Filtrado de Eventos de Sistema (Cumpleaños), Formateo Temporal Completo y Acotación de Rangos en Calendar', async () => {
+    // 0. Validación de esquema Zod para ListCalendarEventsActionSchema
+    const parsedAction = ListCalendarEventsActionSchema.safeParse({
+      action: 'LIST_CALENDAR_EVENTS',
+      range: 'THIS_MONTH',
+      month: 'octubre',
+      includeBirthdays: false,
+    });
+    assert.equal(parsedAction.success, true);
+    assert.equal(parsedAction.data.range, 'THIS_MONTH');
+    assert.equal(parsedAction.data.month, 'octubre');
+    assert.equal(parsedAction.data.includeBirthdays, false);
+
+    // 1. Verificar que listUpcomingEvents con excludeBirthdays: true filtre correctamente eventos con eventType: 'birthday' y 'cumpleaños'
+    const rawEvents = [
+      {
+        id: 'ev_work_1',
+        summary: 'Reunión Estratégica STAND IA',
+        start: { dateTime: '2026-10-15T10:00:00-06:00' },
+        end: { dateTime: '2026-10-15T11:00:00-06:00' },
+        eventType: 'default',
+        location: 'Oficina Central Deko Labs',
+      },
+      {
+        id: 'ev_bday_system',
+        summary: '¡Feliz cumpleaños!',
+        start: { date: '2027-03-30' },
+        end: { date: '2027-03-31' },
+        eventType: 'birthday',
+      },
+      {
+        id: 'ev_bday_text',
+        summary: 'Recordatorio: Cumpleaños de Proveedor',
+        start: { date: '2026-11-20' },
+        end: { date: '2026-11-21' },
+        eventType: 'default',
+      },
+    ];
+
+    let lastListParams = null;
+    const mockCalendar = {
+      events: {
+        list: async (params) => {
+          lastListParams = params;
+          return { data: { items: rawEvents } };
+        },
+      },
+    };
+
+    const calService = new CalendarService({ calendarClient: mockCalendar });
+
+    // Consulta con excludeBirthdays: true (por defecto)
+    const filteredUpcoming = await calService.listUpcomingEvents({ maxResults: 10 });
+    assert.equal(filteredUpcoming.length, 1, 'Debe haber filtrado los 2 cumpleaños');
+    assert.equal(filteredUpcoming[0].id, 'ev_work_1');
+    assert.equal(filteredUpcoming[0].summary, 'Reunión Estratégica STAND IA');
+    assert.equal(filteredUpcoming[0].isAllDay, false);
+
+    // Consulta con excludeBirthdays: false (debe incluir cumpleaños)
+    const allUpcoming = await calService.listUpcomingEvents({ maxResults: 10, excludeBirthdays: false });
+    assert.equal(allUpcoming.length, 3, 'Debe incluir todos los eventos si excludeBirthdays es falso');
+
+    // 2. Verificar que LIST_CALENDAR_EVENTS con evento all-day (start: '2026-10-17') no devuelva "06:00 PM" sino "Todo el día" con fecha correcta
+    const allDayEvents = [
+      {
+        id: 'ev_allday_1',
+        summary: 'DevFest Guatemala 2026',
+        start: '2026-10-17',
+        isAllDay: true,
+        location: 'Grand Tikal Futura Hotel',
+      },
+    ];
+
+    const mockCalServiceAllDay = {
+      getTodayEvents: async () => allDayEvents,
+    };
+
+    const allDayResult = await executeAction(
+      { action: 'LIST_CALENDAR_EVENTS', range: 'TODAY' },
+      { calendarService: mockCalServiceAllDay }
+    );
+
+    assert.ok(!allDayResult.reply.includes('06:00 PM'), 'Evento all-day JAMÁS debe mostrarse como 06:00 PM');
+    assert.ok(!allDayResult.reply.includes('18:00'), 'Evento all-day JAMÁS debe mostrarse como 18:00');
+    assert.ok(allDayResult.reply.includes('Todo el día'), 'Debe indicar claramente "Todo el día"');
+    assert.ok(allDayResult.reply.includes('17'), 'Debe mostrar el día 17');
+    assert.ok(allDayResult.reply.includes('DevFest Guatemala 2026'), 'Debe mostrar el resumen del evento');
+
+    // 3. Verificar que range: 'THIS_MONTH' consulte los eventos del mes delimitados sin desbordar al siguiente año
+    const mockCalServiceMonth = {
+      getMonthEvents: async ({ month, excludeBirthdays }) => {
+        return [
+          {
+            id: 'ev_oct_1',
+            summary: 'PlaneToys & Deko Labs Sync',
+            start: '2026-10-10T15:00:00-06:00',
+            location: 'Zoom',
+          },
+          {
+            id: 'ev_oct_2',
+            summary: 'DevFest Guatemala City 2026',
+            start: '2026-10-24T08:00:00-06:00',
+            location: 'Grand Tikal Futura',
+          },
+        ];
+      },
+    };
+
+    // Probamos el método getMonthEvents directamente en CalendarService con cliente mock
+    const realCalService = new CalendarService({
+      calendarClient: {
+        events: {
+          list: async (params) => {
+            lastListParams = params;
+            return {
+              data: {
+                items: [
+                  {
+                    id: 'oct_real_1',
+                    summary: 'Cita de Octubre',
+                    start: { dateTime: '2026-10-10T10:00:00-06:00' },
+                    eventType: 'default',
+                  },
+                  {
+                    id: 'bday_march_2027',
+                    summary: '¡Feliz cumpleaños!',
+                    start: { date: '2027-03-30' },
+                    eventType: 'birthday',
+                  },
+                ],
+              },
+            };
+          },
+        },
+      },
+    });
+
+    const octEvents = await realCalService.getMonthEvents({ month: 9, year: 2026, excludeBirthdays: true });
+    // Verificar que timeMin y timeMax acoten el mes de octubre 2026 estrictamente
+    assert.ok(lastListParams.timeMin.startsWith('2026-10-01'), 'timeMin debe iniciar en octubre 2026');
+    assert.ok(lastListParams.timeMax.startsWith('2026-11-01'), 'timeMax debe cerrar el 31 de octubre a medianoche UTC (05:59 UTC del 1 de nov)');
+    assert.equal(octEvents.length, 1, 'Debe excluir el cumpleaños de 2027');
+    assert.equal(octEvents[0].summary, 'Cita de Octubre');
+
+    // Probamos la acción LIST_CALENDAR_EVENTS integrada con range: 'THIS_MONTH' y month: 'octubre'
+    const monthActionResult = await executeAction(
+      { action: 'LIST_CALENDAR_EVENTS', range: 'THIS_MONTH', month: 'octubre' },
+      { calendarService: mockCalServiceMonth }
+    );
+
+    assert.ok(monthActionResult.reply.includes('Agenda de Google Calendar (del Mes'), 'Debe etiquetar como "del Mes"');
+    assert.ok(monthActionResult.reply.includes('PlaneToys & Deko Labs Sync'));
+    assert.ok(monthActionResult.reply.includes('DevFest Guatemala City 2026'));
+    assert.ok(!monthActionResult.reply.includes('cumpleaños'), 'Cero cumpleaños repetidos');
+    assert.equal(monthActionResult.calendarEvents.length, 2);
+
+    // 4. Bucle Cognitivo Cerrado: Validar que LIST_CALENDAR_EVENTS invoque synthesizeToolResults cuando la IA está conectada
+    let capturedSynthesisPrompt = null;
+    const mockAiCalendarSynthesis = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          const promptStr = typeof contents?.[0] === 'string' ? contents[0] : '';
+          capturedSynthesisPrompt = promptStr;
+          return {
+            text: '¡Sebastián querido, mi líder adorado! Ya revisé tu agenda para este mes de octubre:\n\n' +
+              '• Tienes la reunión con PlaneToys y el DevFest Guatemala City en Grand Tikal Futura.\n' +
+              '• Tienes varios días despejados para avanzar en los diseños de stands.\n\n' +
+              '¿Deseas que reserve algún bloque para trabajo de enfoque?',
+          };
+        },
+      },
+    };
+
+    const brainWithAi = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiCalendarSynthesis,
+      calendarService: mockCalServiceMonth,
+    });
+
+    const aiMonthResult = await brainWithAi._executeExtractedActions(
+      '```json\n{"action": "LIST_CALENDAR_EVENTS", "range": "THIS_MONTH", "month": "octubre"}\n```',
+      null,
+      { userText: '¿Cómo viene mi agenda para octubre?' }
+    );
+
+    assert.ok(capturedSynthesisPrompt, 'Debe haber invocado el método de síntesis agéntica');
+    assert.ok(capturedSynthesisPrompt.includes('Eres Carmencita, la secretaria ejecutiva'), 'Debe utilizar TOOL_SYNTHESIS_PROMPT');
+    assert.ok(capturedSynthesisPrompt.includes('Fecha y hora actual en Guatemala:'), 'Debe incluir el reloj vivo de Guatemala');
+    assert.ok(capturedSynthesisPrompt.includes('PlaneToys & Deko Labs Sync'), 'Debe inyectar los datos reales en dataSummary');
+    assert.ok(capturedSynthesisPrompt.includes('DevFest Guatemala City 2026'), 'Debe inyectar los eventos sin ruido');
+    assert.ok(!aiMonthResult.reply.includes('```'), 'La respuesta ejecutiva debe estar libre de bloques de código');
+    assert.ok(!aiMonthResult.reply.includes('Agenda de Google Calendar (del Mes'), 'Debe ser lenguaje humano y cálido, libre de volcados planos');
+    assert.ok(aiMonthResult.reply.includes('Sebastián querido'), 'Debe incluir el tono cálido y zalamero de Carmencita');
+    assert.ok(aiMonthResult.reply.includes('DevFest Guatemala City'), 'Debe sintetizar la información solicitada');
+
+    // 5. Validar que SEARCH_CONTACT invoque synthesizeToolResults cuando la IA está conectada
+    let capturedContactPrompt = null;
+    const mockAiContactSynthesis = {
+      models: {
+        generateContent: async ({ contents } = {}) => {
+          capturedContactPrompt = typeof contents?.[0] === 'string' ? contents[0] : '';
+          return {
+            text: 'Sebastián querido, aquí te tengo el contacto de Elena Morales de Telares Chapines:\n\n' +
+              'Puedes llamarla directamente o escribirle por WhatsApp. ¡Está lista para cotizarnos!',
+          };
+        },
+      },
+    };
+
+    const mockContactService = {
+      searchContacts: async () => [
+        { name: 'Elena Morales', role: 'Gerente Comercial', company: 'Telares Chapines', phone: '50244449999', email: 'elena@telares.gt' }
+      ],
+    };
+
+    const brainContactAi = new CarmencitaBrain({
+      prisma: mockPrisma,
+      ai: mockAiContactSynthesis,
+      contactService: mockContactService,
+    });
+
+    const contactAiResult = await brainContactAi._executeExtractedActions(
+      '```json\n{"action": "SEARCH_CONTACT", "query": "textil"}\n```',
+      null,
+      { userText: 'Búscame el teléfono de textiles' }
+    );
+
+    assert.ok(capturedContactPrompt, 'Debe haber invocado synthesizeToolResults para SEARCH_CONTACT');
+    assert.ok(capturedContactPrompt.includes('Elena Morales'));
+    assert.ok(capturedContactPrompt.includes('50244449999'));
+    assert.ok(contactAiResult.reply.includes('Elena Morales'));
   });
 
   // Limpieza final
