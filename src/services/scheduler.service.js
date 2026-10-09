@@ -1,18 +1,7 @@
 import { prisma as defaultPrisma } from '../core/prisma.js';
 import { config } from '../config.js';
 import { sanitizeReplyText } from '../tools/index.js';
-
-const WEATHER_DESCRIPTIONS = {
-  0: 'Soleado y despejado', 1: 'Mayormente soleado', 2: 'Parcialmente nublado', 3: 'Nublado',
-  45: 'Niebla matutina', 48: 'Niebla matutina', 51: 'Llovizna intermitente', 53: 'Llovizna intermitente',
-  55: 'Llovizna intermitente', 61: 'Lluvia / Chubascos', 63: 'Lluvia / Chubascos', 65: 'Lluvia / Chubascos',
-  80: 'Lluvia / Chubascos', 81: 'Lluvia / Chubascos', 82: 'Lluvia / Chubascos', 95: 'Tormenta eléctrica',
-  96: 'Tormenta eléctrica', 99: 'Tormenta eléctrica',
-};
-
-function mapWeatherCode(code) {
-  return WEATHER_DESCRIPTIONS[code] || 'Condiciones estables';
-}
+import { ExecutiveBriefingService } from './executive-briefing.service.js';
 
 function getGuatemalaTimeParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -56,6 +45,15 @@ export class SchedulerService {
     this.obsidianService = opts.obsidianService || null;
     this.embeddingService = opts.embeddingService || null;
     this.diagnosticsService = opts.diagnosticsService || null;
+    this.executiveBriefingService = opts.executiveBriefingService || new ExecutiveBriefingService({
+      ai: opts.ai || opts.brain?.ai || null,
+      calendarService: this.calendarService,
+      taskService: this.taskService,
+      gmailService: this.gmailService,
+      telegramAdapter: this.telegramAdapter,
+      weatherFetcher: this.weatherFetcher,
+      brain: this.brain,
+    });
     this.timer = null;
     this.isRunning = false;
     this.isChecking = false;
@@ -143,20 +141,20 @@ export class SchedulerService {
     return text;
   }
 
+  _syncBriefingService() {
+    if (!this.executiveBriefingService) return;
+    this.executiveBriefingService.ai = this.brain?.ai || this.executiveBriefingService.ai;
+    this.executiveBriefingService.brain = this.brain || this.executiveBriefingService.brain;
+    this.executiveBriefingService.calendarService = this.calendarService || this.executiveBriefingService.calendarService;
+    this.executiveBriefingService.taskService = this.taskService || this.executiveBriefingService.taskService;
+    this.executiveBriefingService.gmailService = this.gmailService || this.executiveBriefingService.gmailService;
+    this.executiveBriefingService.weatherFetcher = this.weatherFetcher || this.executiveBriefingService.weatherFetcher;
+    this.executiveBriefingService.telegramAdapter = this.telegramAdapter || this.executiveBriefingService.telegramAdapter;
+  }
+
   async fetchGuatemalaWeather() {
-    if (typeof this.weatherFetcher === 'function') return await this.weatherFetcher();
-    try {
-      const url = 'https://api.open-meteo.com/v1/forecast?latitude=14.6407&longitude=-90.5133&current=temperature_2m,relative_humidity_2m,weather_code&timezone=America%2FGuatemala';
-      const res = await fetch(url, { headers: { 'User-Agent': 'CarmencitaHub/1.0' } });
-      if (!res.ok) throw new Error(`HTTP Status ${res.status}`);
-      const data = await res.json();
-      const temp = Math.round(data.current?.temperature_2m ?? 21);
-      const code = data.current?.weather_code ?? 0;
-      return `${temp}°C, ${mapWeatherCode(code)}`;
-    } catch (err) {
-      console.warn('[Scheduler] No se pudo obtener el clima de Open-Meteo:', err.message);
-      return '21°C, Parcialmente nublado';
-    }
+    this._syncBriefingService();
+    return await this.executiveBriefingService.fetchGuatemalaWeather();
   }
 
   // ----------------- RUTINA 1: BRIEFING MATUTINO -----------------
@@ -171,90 +169,9 @@ export class SchedulerService {
 
   async triggerMorningBrief(referenceDate = new Date()) {
     const { todayStr } = getGuatemalaTimeParts(referenceDate);
-    const weatherStr = await this.fetchGuatemalaWeather();
-
-    let events = [];
-    if (this.calendarService?.getTodayEvents) {
-      try {
-        events = await this.calendarService.getTodayEvents({ timeZone: 'America/Guatemala' });
-      } catch (err) { console.warn('[Scheduler] Error consultando agenda para briefing:', err.message); }
-    }
-
-    let tasks = [];
-    if (this.taskService?.listTasks) {
-      try {
-        tasks = await this.taskService.listTasks({ onlyPending: true, limit: 5 });
-      } catch (err) { console.warn('[Scheduler] Error consultando tareas para briefing:', err.message); }
-    }
-
-    let unreadEmails = [];
-    try {
-      if (this.gmailService?.getInboxSummary) {
-        const summary = await this.gmailService.getInboxSummary({ maxResults: 5 });
-        unreadEmails = summary?.messages || [];
-      } else if (this.gmailService?.getUnreadInboxMessages) {
-        unreadEmails = await this.gmailService.getUnreadInboxMessages({ maxResults: 5, onlyImportant: true });
-      }
-    } catch (err) { console.warn('[Scheduler] Error consultando Gmail para briefing:', err.message); }
-
-    const eventsFormatted = events.length === 0
-      ? '• Sin citas agendadas para hoy.'
-      : events.map((ev) => {
-          let time = '';
-          if (ev.start) {
-            const d = new Date(ev.start);
-            time = !isNaN(d.getTime()) ? d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' }) : ev.start;
-          }
-          return `• ${time} - ${ev.summary}${ev.location ? ` (${ev.location})` : ''}`;
-        }).join('\n');
-
-    const tasksFormatted = tasks.length === 0
-      ? '• Sin tareas pendientes prioritarias.'
-      : tasks.map((t) => `• [ ] ${t.description} [${t.priority || 'MEDIA'}]`).join('\n');
-
-    let emailSection = [];
-    if (this.gmailService) {
-      const emailsFormatted = unreadEmails.length === 0
-        ? '• Bandeja al día (sin correos pendientes).'
-        : unreadEmails.map((m) => {
-            const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Desconocido';
-            const snippetClean = m.snippet ? ` - ${m.snippet.slice(0, 80).replace(/\n/g, ' ')}...` : '';
-            return `• [${fromClean}] ${m.subject}${snippetClean}`;
-          }).join('\n');
-
-      emailSection = [
-        `✉️ Bandeja de entrada Gmail (${unreadEmails.length} pendiente${unreadEmails.length === 1 ? '' : 's'}):`,
-        emailsFormatted,
-        '',
-      ];
-    }
-
-    let message = [
-      '🌅 ¡Buenos días, Sebastián! Carmencita te presenta tu resumen de hoy:',
-      '',
-      `🌤️ Clima (Ciudad de Guatemala): ${weatherStr}`,
-      '',
-      `📅 Tu agenda de hoy (${events.length} cita${events.length === 1 ? '' : 's'}):`,
-      eventsFormatted,
-      '',
-      '📋 Tareas prioritarias:',
-      tasksFormatted,
-      '',
-      ...emailSection,
-      '¡Que sea un día muy exitoso para Deko Labs!',
-    ].join('\n');
-
-    if (this.brain?.ai?.models?.generateContent) {
-      try {
-        const prompt = `Eres Carmencita, la secretaria ejecutiva de Sebastián Jiménez. Redacta el Briefing Matutino de las 07:30 AM con zalamería reactiva, calidez ejecutiva y aire visual.\nDatos:\n- Clima: ${weatherStr}\n- Citas: ${eventsFormatted}\n- Tareas: ${tasksFormatted}\n- Correos: ${unreadEmails.map((m) => `${m.from}: ${m.subject}`).join(', ') || 'Bandeja limpia'}\n\nDirectivas: Saludo cariñoso y dinámico, párrafos cortos con doble salto (\\n\\n), HTML limpio (<b>, <i>) y emoticones sobrios (☕, 🌤️, 📅, 📋, ✉️). CERO asteriscos.`;
-        const res = await this.brain.ai.models.generateContent({ model: config.ai.modelName, contents: prompt });
-        const aiText = typeof res?.text === 'function' ? res.text() : (res?.text || '');
-        if (aiText && aiText.trim().length > 20) message = sanitizeReplyText(aiText.trim());
-      } catch (aiErr) {
-        console.warn('[Scheduler] Falló síntesis de briefing con IA, usando fallback estructurado:', aiErr.message);
-      }
-    }
-
+    this._syncBriefingService();
+    const briefing = await this.executiveBriefingService.buildMorningBriefing({ date: referenceDate });
+    const message = briefing.text;
     await this._dispatchTelegram(message);
     this.lastBriefDate = todayStr;
     return message;
@@ -362,18 +279,11 @@ export class SchedulerService {
     const isWeekend = ['sat', 'sun', 'sáb', 'dom'].some((d) => weekday.toLowerCase().startsWith(d));
     if (isWeekend) return null;
 
-    if (hour === 18 && minute >= 30 && minute <= 35 && this.lastEveningDate !== todayStr) {
-      let tomorrowSummary = '• Mañana tienes tu agenda despejada para crear y avanzar.';
-      if (this.calendarService?.getTomorrowEvents) {
-        try {
-          const events = await this.calendarService.getTomorrowEvents({ excludeBirthdays: true });
-          if (events && events.length > 0) tomorrowSummary = events.map((e) => `• ${e.summary}`).join('\n');
-        } catch (err) {
-          console.warn('[Scheduler] Error consultando citas de mañana para debriefing:', err.message);
-        }
-      }
-
-      const msg = `✨ <b>¡Mi jefe consentido, hora de cerrar jornada por hoy!</b>\n\n📅 <b>Para mañana:</b>\n${tomorrowSummary}\n\n¿Quedó algún acuerdo importante, cotización o apunte de hoy que quieras que te resguarde en tu bóveda de Obsidian antes de descansar?`;
+    const isEveningWindow = (hour === 18 && minute >= 30 && minute <= 35) || (hour === 19 && minute <= 5);
+    if (isEveningWindow && this.lastEveningDate !== todayStr) {
+      this._syncBriefingService();
+      const debrief = await this.executiveBriefingService.buildEveningBriefing({ date: referenceDate });
+      const msg = debrief.text;
       await this._dispatchTelegram(msg);
       this.lastEveningDate = todayStr;
       return msg;

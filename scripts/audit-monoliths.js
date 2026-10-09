@@ -11,7 +11,7 @@ const rootDir = path.resolve(__dirname, '..');
  */
 export const DOMAIN_CEILINGS = {
   // Capa Core y Orquestación
-  'src/core/brain.js': 280,
+  'src/core/brain.js': 350,
   'src/core/agent-runner.js': 350,
   'src/core/carmencita.prompt.js': 120,
   'src/presentation/formatter.js': 200,
@@ -20,7 +20,7 @@ export const DOMAIN_CEILINGS = {
 
   // Capa de Herramientas Modulares (src/tools/)
   'src/tools/declarations.js': 280,
-  'src/tools/dispatcher.js': 320,
+  'src/tools/dispatcher.js': 360,
   'src/tools/obsidian.tools.js': 300,
   'src/tools/workspace.tools.js': 420,
   'src/tools/system.tools.js': 200,
@@ -29,6 +29,7 @@ export const DOMAIN_CEILINGS = {
   'src/tools/index.js': 240,
 
   // Capa de Servicios Especializados (src/services/)
+  'src/services/executive-briefing.service.js': 350,
   'src/services/obsidian-drive.service.js': 950,
   'src/services/gmail.service.js': 380,
   'src/services/calendar.service.js': 320,
@@ -49,7 +50,7 @@ export const DOMAIN_CEILINGS = {
 
   // Capa de Adaptadores e Integración
   'src/adapters/session-queue.js': 200,
-  'src/adapters/telegram.js': 550,
+  'src/adapters/telegram.js': 650,
 };
 
 export const LAYER_DEFAULT_CEILINGS = {

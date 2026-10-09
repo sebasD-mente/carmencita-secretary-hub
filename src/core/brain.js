@@ -27,6 +27,7 @@ export class CarmencitaBrain {
     }
 
     this.toolDispatcher = deps?.toolDispatcher || new ToolDispatcher(this.deps);
+    this.stagedActions = new Map();
     this.agentRunner = deps?.agentRunner || new AgentRunner({
       aiPool: {
         executeWithRetry: async (callFn) => callFn({
@@ -110,18 +111,77 @@ export class CarmencitaBrain {
     }
   }
 
+  stageAction({ toolName, args, description, senderId, ttlMs = 15 * 60 * 1000 }) {
+    const actionId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const staged = {
+      actionId,
+      toolName,
+      args: args || {},
+      description: description || `Ejecutar ${toolName}`,
+      senderId: String(senderId || 'default'),
+      createdAt: Date.now(),
+      expiresAt: Date.now() + ttlMs,
+    };
+    this.stagedActions.set(actionId, staged);
+    return staged;
+  }
+
+  async executeStagedAction(actionIdOrStaged, context = {}) {
+    let staged = null;
+    let actionId = null;
+
+    if (typeof actionIdOrStaged === 'string') {
+      actionId = actionIdOrStaged;
+      staged = this.stagedActions.get(actionId);
+    } else if (actionIdOrStaged && typeof actionIdOrStaged === 'object') {
+      staged = actionIdOrStaged;
+      actionId = staged.actionId;
+    }
+
+    if (!staged) {
+      throw new Error('Esta acción no existe o ya fue procesada.');
+    }
+
+    if (staged.expiresAt && Date.now() > staged.expiresAt) {
+      if (actionId) this.stagedActions.delete(actionId);
+      throw new Error('Esta acción ha expirado (TTL de 15 minutos superado).');
+    }
+
+    if (actionId) {
+      this.stagedActions.delete(actionId);
+    }
+
+    const dispatcher = this.toolDispatcher || this.agentRunner?.toolDispatcher;
+    if (!dispatcher) {
+      throw new Error('ToolDispatcher no disponible en CarmencitaBrain.');
+    }
+
+    const dispatchContext = {
+      ...context,
+      senderId: staged.senderId,
+      isConfirmed: true,
+      bypassStaging: true,
+    };
+
+    return await dispatcher.dispatch(staged.toolName, staged.args, dispatchContext);
+  }
+
   async _extractAndSaveMemoryBackground({ userText, historyContent }) {
     if (!this.embeddingService?.saveMemory || !this.ai || !userText?.trim()) return;
+    const casualPattern = /^(hola|buenos d[ií]as|buenas tardes|buenas noches|adi[oó]s|gracias|muchas gracias|ok|de acuerdo|entendido|perfecto|va|listo|s[ií]|no|chao|bueno)[.!]?$/i;
+    if (casualPattern.test(userText.trim())) return;
+
     await new Promise((resolve) => setImmediate(resolve));
     try {
       const response = await this._generateContentWithFailover({
         contents: [MEMORY_EXTRACT_PROMPT(userText, historyContent)],
-        config: { systemInstruction: 'Eres un extractor analítico de hechos, preferencias y directivas a largo plazo.' },
+        config: { systemInstruction: 'Eres un extractor analítico de hechos, preferencias y directivas a largo plazo con filtro estricto de saliencia ejecutiva.' },
       });
       const match = (response?.text || '').match(/\{[\s\S]*?\}/);
       if (!match) return;
       const parsed = JSON.parse(match[0]);
       if (parsed.shouldSave === true && parsed.content && typeof parsed.content === 'string' && parsed.content.trim()) {
+        if (parsed.salience !== undefined && Number(parsed.salience) < 0.6) return;
         const allowed = ['PREFERENCIA', 'ACUERDO', 'PROVEEDOR', 'DIRECTIVA', 'GENERAL'];
         const catUpper = (parsed.category || '').toUpperCase();
         await this.embeddingService.saveMemory({
@@ -135,10 +195,15 @@ export class CarmencitaBrain {
   async _resolveRAGContext(queryText) {
     if (!this.embeddingService) return { directivesBlock: '', memoriesBlock: '' };
     try {
-      const active = typeof this.embeddingService.getActiveDirectives === 'function' ? await this.embeddingService.getActiveDirectives({ limit: 10 }) : [];
-      const mems = await this.embeddingService.searchSimilarMemories(queryText, { limit: 3, excludeCategory: 'OBSIDIAN' });
-      const directivesBlock = active?.length ? `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${active.map(d => `- ${d.content}`).join('\n')}\n` : '';
-      const memoriesBlock = mems?.length ? `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${mems.map(m => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n` : '';
+      let directivesBlock = '';
+      let memoriesBlock = '';
+      if (typeof this.embeddingService.getActiveDirectives === 'function') {
+        const active = await this.embeddingService.getActiveDirectives({ limit: 10 });
+        if (active?.length) directivesBlock = `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${active.map((d) => `- ${d.content}`).join('\n')}\n`;
+      } else if (typeof this.embeddingService.searchSimilarMemories === 'function') {
+        const mems = await this.embeddingService.searchSimilarMemories(queryText, { limit: 3, excludeCategory: 'OBSIDIAN' });
+        if (mems?.length) memoriesBlock = `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${mems.map((m) => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`;
+      }
       return { directivesBlock, memoriesBlock };
     } catch { return { directivesBlock: '', memoriesBlock: '' }; }
   }

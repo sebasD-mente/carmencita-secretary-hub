@@ -1,4 +1,4 @@
-import { Bot, InputFile } from 'grammy';
+import { Bot, InputFile, InlineKeyboard } from 'grammy';
 import { config } from '../config.js';
 import { PresentationFormatter } from '../presentation/formatter.js';
 import { UserSessionQueue } from './session-queue.js';
@@ -15,6 +15,7 @@ export class TelegramAdapter {
       this.deps = (deps && typeof deps === 'object') ? deps : {};
     }
     this.sessionQueue = this.deps.sessionQueue || (this.storage?.sessionQueue) || new UserSessionQueue();
+    this.stagedActions = new Map();
     this.bot = null;
     this.isRunning = false;
   }
@@ -57,9 +58,55 @@ export class TelegramAdapter {
     });
 
     this._registerCommands();
+    this._registerCallbackHandlers();
     this._registerMessageHandlers();
 
     return true;
+  }
+
+  _registerCallbackHandlers() {
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery?.data || '';
+      if (!data.startsWith('hitl:')) return;
+
+      const parts = data.split(':');
+      const actionType = parts[1];
+      const actionId = parts.slice(2).join(':');
+      const staged = this.stagedActions.get(actionId);
+
+      await ctx.answerCallbackQuery().catch(() => {});
+
+      if (!staged) {
+        return ctx.editMessageText('⚠️ Esta acción ha expirado o ya fue procesada.').catch(() => {});
+      }
+
+      const fromId = String(ctx.from?.id || '');
+      if (staged.senderId && staged.senderId !== 'default' && staged.senderId !== fromId) {
+        return ctx.reply('🔒 No tienes autorización para confirmar esta acción.').catch(() => {});
+      }
+
+      if (staged.expiresAt && Date.now() > staged.expiresAt) {
+        this.stagedActions.delete(actionId);
+        return ctx.editMessageText('⚠️ Esta acción ha expirado (límite TTL de 15 minutos superado).').catch(() => {});
+      }
+
+      if (actionType === 'cancel') {
+        this.stagedActions.delete(actionId);
+        return ctx.editMessageText(`❌ <b>Acción cancelada:</b> ${staged.description}`, { parse_mode: 'HTML' }).catch(() => {});
+      }
+
+      if (actionType === 'confirm') {
+        this.stagedActions.delete(actionId);
+        await ctx.editMessageText(`⏳ <i>Ejecutando:</i> ${staged.description}...`, { parse_mode: 'HTML' }).catch(() => {});
+        try {
+          const result = await this.brain.executeStagedAction(staged);
+          const replyMsg = result?.message || result?.reply || `✅ <b>Completado con éxito:</b> ${staged.description}`;
+          await ctx.reply(replyMsg, { parse_mode: 'HTML' });
+        } catch (err) {
+          await ctx.reply(`⚠️ Error ejecutando acción: ${err.message}`);
+        }
+      }
+    });
   }
 
   async _safeReply(ctx, text) {
@@ -290,7 +337,18 @@ export class TelegramAdapter {
             },
           });
 
-          if (reply?.hasVoice && reply?.voiceFile) {
+          if (reply?.hasStagedAction && reply?.stagedAction) {
+            const staged = reply.stagedAction;
+            this.stagedActions.set(staged.actionId, staged);
+            const keyboard = new InlineKeyboard()
+              .text('✅ Confirmar', `hitl:confirm:${staged.actionId}`)
+              .text('❌ Cancelar', `hitl:cancel:${staged.actionId}`);
+            const msgText = reply.reply || `⚠️ <b>Confirmación Requerida:</b>\n\n¿Deseas autorizar la siguiente acción?\n📌 <i>${staged.description}</i>`;
+            await ctx.reply(msgText, {
+              parse_mode: 'HTML',
+              reply_markup: keyboard,
+            });
+          } else if (reply?.hasVoice && reply?.voiceFile) {
             await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
             if (reply?.hasPhoto && reply?.photoFile) {
               const photoInput = reply.photoFile.buffer
@@ -542,6 +600,19 @@ export class TelegramAdapter {
   async sendMessage(chatId, text) {
     if (!this.bot) return false;
     await this._safeReply({ reply: (msg, opts) => this.bot.api.sendMessage(chatId, msg, opts) }, text);
+    return true;
+  }
+
+  async sendConfirmationMessage(chatId, text, staged) {
+    if (!this.bot || !staged?.actionId) return false;
+    this.stagedActions.set(staged.actionId, staged);
+    const keyboard = new InlineKeyboard()
+      .text('✅ Confirmar', `hitl:confirm:${staged.actionId}`)
+      .text('❌ Cancelar', `hitl:cancel:${staged.actionId}`);
+    await this.bot.api.sendMessage(chatId, text, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
     return true;
   }
 }

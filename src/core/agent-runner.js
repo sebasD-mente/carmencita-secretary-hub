@@ -235,6 +235,11 @@ export class AgentRunner {
  */
 export function mapToolSummaryToActionResult(runnerResult) {
   const opts = { reply: runnerResult.reply };
+  if (runnerResult.stagedActions && runnerResult.stagedActions.length > 0) {
+    opts.hasStagedAction = true;
+    opts.stagedAction = runnerResult.stagedActions[0];
+    opts.stagedActions = runnerResult.stagedActions;
+  }
   for (const call of runnerResult.toolCallsSummary || []) {
     const { name, result } = call;
     const data = result?.data;

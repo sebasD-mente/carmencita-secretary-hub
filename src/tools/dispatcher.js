@@ -22,16 +22,15 @@ export class ToolDispatcher {
    * @returns {boolean}
    */
   isDestructiveAction(toolName, args = {}) {
-    if (toolName === 'DELETE_EVENT' || toolName === 'SEND_EMAIL' || toolName === 'CANCEL_TASK') {
-      return true;
-    }
+    if (['DELETE_EVENT', 'CANCEL_CALENDAR_EVENT', 'SEND_EMAIL', 'CANCEL_TASK', 'DELETE_NOTE'].includes(toolName)) return true;
     if (toolName === 'manage_calendar') {
-      const action = String(args.action || '').toUpperCase();
-      return action === 'CANCEL' || action === 'DELETE' || action === 'DELETE_EVENT';
+      const a = String(args.action || '').toUpperCase();
+      return a === 'CANCEL' || a === 'DELETE' || a === 'DELETE_EVENT';
     }
-    if (toolName === 'manage_tasks') {
-      const action = String(args.action || '').toUpperCase();
-      return action === 'CANCEL';
+    if (toolName === 'manage_tasks') return String(args.action || '').toUpperCase() === 'CANCEL';
+    if (toolName === 'manage_obsidian_notes') {
+      const a = String(args.action || '').toUpperCase();
+      return a === 'DELETE' || a === 'DELETE_NOTE';
     }
     return false;
   }
@@ -58,14 +57,18 @@ export class ToolDispatcher {
     const args = validation.data;
 
     // 2. Segregación READ vs. MUTATE Crítico (Staged Actions)
-    if (this.isDestructiveAction(toolName, args)) {
+    if (!context.isConfirmed && !context.bypassStaging && this.isDestructiveAction(toolName, args)) {
       const summary = args.summary || args.title || args.eventId || args.taskId || `${toolName}:${args.action || 'MUTATE'}`;
-      const stagedPayload = {
-        status: 'staged',
-        requiresConfirmation: true,
-        action: toolName === 'manage_calendar' && args.action === 'CANCEL' ? 'CANCEL_CALENDAR_EVENT' : toolName,
-        preview: summary,
-      };
+      const actionType = toolName === 'manage_calendar' && (args.action === 'CANCEL' || args.action === 'DELETE') ? 'CANCEL_CALENDAR_EVENT'
+        : toolName === 'manage_tasks' && args.action === 'CANCEL' ? 'CANCEL_TASK'
+        : toolName === 'manage_obsidian_notes' && args.action === 'DELETE' ? 'DELETE_NOTE'
+        : toolName;
+
+      const description = `Confirmar ${actionType}: "${summary}"`;
+      const brain = this.deps.brain;
+      const stagedPayload = brain?.stageAction
+        ? { ...brain.stageAction({ toolName, args, description, senderId: context.senderId }), status: 'staged', requiresConfirmation: true, action: actionType, preview: summary }
+        : { actionId: `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'staged', requiresConfirmation: true, action: actionType, toolName, args, description, preview: summary, createdAt: Date.now(), expiresAt: Date.now() + 900000 };
 
       if (context && Array.isArray(context.stagedActions) && !context.stagedActions.includes(stagedPayload)) {
         context.stagedActions.push(stagedPayload);
@@ -116,13 +119,18 @@ export class ToolDispatcher {
     try {
       switch (toolName) {
         case 'manage_calendar':
-          return await this._handleCalendar(args, context);
+        case 'CANCEL_CALENDAR_EVENT':
+        case 'DELETE_EVENT':
+          return await this._handleCalendar(toolName !== 'manage_calendar' ? { ...args, action: 'CANCEL' } : args, context);
         case 'search_gmail':
-          return await this._handleGmail(args, context);
+        case 'SEND_EMAIL':
+          return await this._handleGmail(toolName === 'SEND_EMAIL' ? { ...args, action: 'SEND' } : args, context);
         case 'manage_obsidian_notes':
-          return await this._handleObsidian(args, context);
+        case 'DELETE_NOTE':
+          return await this._handleObsidian(toolName === 'DELETE_NOTE' ? { ...args, action: 'DELETE' } : args, context);
         case 'manage_tasks':
-          return await this._handleTasks(args, context);
+        case 'CANCEL_TASK':
+          return await this._handleTasks(toolName === 'CANCEL_TASK' ? { ...args, action: 'CANCEL' } : args, context);
         case 'manage_documents':
           return await this._handleDocuments(args, context);
         case 'search_knowledge_base':
@@ -232,6 +240,10 @@ export class ToolDispatcher {
       const syncResult = await service.syncVaultToVector();
       return { success: true, data: { syncResult } };
     }
+    if (action === 'DELETE' || action === 'DELETE_NOTE') {
+      const result = typeof service.deleteNote === 'function' ? await service.deleteNote(args.title || args.query) : { deleted: true };
+      return { success: true, data: { result } };
+    }
     throw new Error(`Acción de Obsidian no reconocida: ${action}`);
   }
 
@@ -253,7 +265,11 @@ export class ToolDispatcher {
       return { success: true, data: { task } };
     }
     if (action === 'CANCEL') {
-      const task = await service.cancelTask(args.taskId || args.title);
+      const task = typeof service.cancelTask === 'function'
+        ? await service.cancelTask(args.taskId || args.title)
+        : (typeof service.cancelTaskByNameOrId === 'function'
+            ? await service.cancelTaskByNameOrId({ id: args.taskId || null, query: args.title || null })
+            : null);
       return { success: true, data: { task } };
     }
     throw new Error(`Acción de tareas no reconocida: ${action}`);

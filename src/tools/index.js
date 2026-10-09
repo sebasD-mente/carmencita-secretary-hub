@@ -29,6 +29,7 @@ export function makeActionResult(opts = {}) {
     actionData: opts.actionData || null, initialAck: opts.initialAck || null, report: opts.report || null,
     progressSent: opts.progressSent || false, syncResult: opts.syncResult || null, hasObsidianSync: Boolean(opts.syncResult),
     hasDiagnostics: opts.hasDiagnostics || false, diagnostics: opts.diagnostics || null,
+    hasStagedAction: opts.hasStagedAction || false, stagedAction: opts.stagedAction || null, stagedActions: opts.stagedActions || null,
     toString() { return this.reply; },
     includes(s) { return this.reply.includes(s); },
   };
