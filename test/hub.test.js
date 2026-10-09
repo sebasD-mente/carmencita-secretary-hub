@@ -5540,6 +5540,208 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(sampleSynthesis.includes('CERO ASTERISCOS DE MARKDOWN'), 'Debe exigir cero asteriscos en la síntesis');
   });
 
+  await t.test('58. Motor Proactivo Autónomo y las 6 Rutinas Cardinales de Carmencita', async () => {
+    const capturedMessages = [];
+    const mockTelegram = {
+      sendMessage: async (chatId, text) => {
+        capturedMessages.push({ chatId, text });
+        return true;
+      },
+    };
+
+    // 1. Guardián Pre-Reunión (checkMeetingAlerts a 30 min)
+    const nowRef = new Date('2026-10-09T10:00:00-06:00');
+    const meetingStart = new Date(nowRef.getTime() + 30 * 60 * 1000).toISOString(); // En 30 minutos exactos
+    const farMeetingStart = new Date(nowRef.getTime() + 120 * 60 * 1000).toISOString(); // En 2 horas
+
+    const mockCalendar = {
+      getTodayEvents: async () => [
+        {
+          id: 'ev_meet_30m',
+          summary: 'Reunión de Stand PlaneToys',
+          start: meetingStart,
+          location: 'Parque de la Industria',
+          htmlLink: 'https://calendar.google.com/event/meet_30m',
+        },
+        {
+          id: 'ev_meet_far',
+          summary: 'Reunión Tarde',
+          start: farMeetingStart,
+        },
+        {
+          id: 'ev_allday',
+          summary: 'Feriado',
+          isAllDay: true,
+        },
+      ],
+      getTomorrowEvents: async () => [
+        { summary: 'Revisión final de stands' },
+        { summary: 'Firma de contrato de madera' },
+      ],
+    };
+
+    const scheduler = new SchedulerService({
+      telegramAdapter: mockTelegram,
+      calendarService: mockCalendar,
+      prisma: mockPrisma,
+    });
+
+    const meetingAlerts = await scheduler.checkMeetingAlerts(nowRef);
+    assert.equal(meetingAlerts.length, 1, 'Debe alertar solo la reunión en la ventana de 25-35 min');
+    assert.equal(meetingAlerts[0].event.summary, 'Reunión de Stand PlaneToys');
+    assert.ok(capturedMessages.length >= 1);
+    const lastTgMsg = capturedMessages[capturedMessages.length - 1].text;
+    assert.ok(lastTgMsg.includes('¡Sebas, recordatorio de reunión en 30 minutos!'));
+    assert.ok(lastTgMsg.includes('Reunión de Stand PlaneToys'));
+    assert.ok(lastTgMsg.includes('Parque de la Industria'));
+    assert.ok(lastTgMsg.includes('https://calendar.google.com/event/meet_30m'));
+    assert.ok(lastTgMsg.includes('notas antes de entrar'));
+
+    // Prevención de duplicado en alerta de reunión
+    const meetingAlertsRepeat = await scheduler.checkMeetingAlerts(nowRef);
+    assert.equal(meetingAlertsRepeat.length, 0, 'No debe disparar alertas repetidas para la misma reunión');
+
+    // 2. Radar de Bandeja Gmail (checkInboxWatchdog)
+    const mockGmail = {
+      getUnreadInboxMessages: async () => [
+        {
+          id: 'msg_prio_stand',
+          from: 'Elena Morales <elena@client.gt>',
+          subject: 'Cotización urgente para stands',
+          snippet: 'Favor enviar el presupuesto actualizado para la feria.',
+        },
+        {
+          id: 'msg_spam',
+          from: 'Newsletter <news@promos.com>',
+          subject: 'Descuentos en muebles',
+          snippet: 'Grandes ofertas de verano...',
+        },
+      ],
+    };
+    scheduler.gmailService = mockGmail;
+
+    // Ejecución en horario laboral (10:00 AM)
+    const inboxAlerts = await scheduler.checkInboxWatchdog(nowRef, true);
+    assert.equal(inboxAlerts.length, 1, 'Solo debe alertar el correo prioritario con palabras clave');
+    assert.equal(inboxAlerts[0].email.id, 'msg_prio_stand');
+    const emailTgMsg = capturedMessages[capturedMessages.length - 1].text;
+    assert.ok(emailTgMsg.includes('¡Jefecito, acaba de entrar un correo importante!'));
+    assert.ok(emailTgMsg.includes('Elena Morales'));
+    assert.ok(emailTgMsg.includes('Cotización urgente para stands'));
+    assert.ok(scheduler.notifiedEmailIds.has('msg_prio_stand'));
+
+    // Deduplicación: no alertar dos veces el mismo correo
+    const repeatInboxAlerts = await scheduler.checkInboxWatchdog(nowRef, true);
+    assert.equal(repeatInboxAlerts.length, 0, 'No debe reenviar alertas del mismo correo ya notificado');
+
+    // Fuera de horario laboral (ej: 21:00) sin force no debe correr
+    const nightTime = new Date('2026-10-09T21:00:00-06:00');
+    const offHoursAlerts = await scheduler.checkInboxWatchdog(nightTime, false);
+    assert.equal(offHoursAlerts.length, 0, 'No debe ejecutarse fuera de la ventana 08:00 - 20:00');
+
+    // 3. Check-in de Mediodía (checkMiddaySync: 13:00 - 13:05 entre semana)
+    const middayWeekday = new Date('2026-10-09T13:02:00-06:00'); // Viernes
+    const middayResult = await scheduler.checkMiddaySync(middayWeekday);
+    assert.ok(middayResult, 'Debe disparar el check-in de mediodía');
+    assert.ok(middayResult.includes('¡Jefe lindo, mitad del día superada!'));
+    assert.ok(middayResult.includes('idea de diseño'));
+
+    // Idempotencia en el mismo día
+    const middayRepeat = await scheduler.checkMiddaySync(middayWeekday);
+    assert.equal(middayRepeat, null, 'No debe repetir el check-in el mismo día');
+
+    // Fin de semana ignorado
+    const weekendMidday = new Date('2026-10-10T13:02:00-06:00'); // Sábado
+    const weekendMiddayResult = await scheduler.checkMiddaySync(weekendMidday);
+    assert.equal(weekendMiddayResult, null, 'No debe enviar check-in los fines de semana');
+
+    // 4. Debriefing de Cierre de Jornada (checkEveningDebrief: 18:30 - 18:35 entre semana)
+    const eveningWeekday = new Date('2026-10-09T18:32:00-06:00'); // Viernes
+    const eveningResult = await scheduler.checkEveningDebrief(eveningWeekday);
+    assert.ok(eveningResult, 'Debe disparar el debriefing de cierre');
+    assert.ok(eveningResult.includes('¡Mi jefe consentido, hora de cerrar jornada por hoy!'));
+    assert.ok(eveningResult.includes('Revisión final de stands'));
+    assert.ok(eveningResult.includes('bóveda de Obsidian'));
+
+    // Idempotencia de cierre
+    const eveningRepeat = await scheduler.checkEveningDebrief(eveningWeekday);
+    assert.equal(eveningRepeat, null, 'No debe repetir el debriefing el mismo día');
+
+    // Fin de semana ignorado para cierre
+    const weekendEvening = new Date('2026-10-11T18:32:00-06:00'); // Domingo
+    const weekendEveningResult = await scheduler.checkEveningDebrief(weekendEvening);
+    assert.equal(weekendEveningResult, null, 'No debe enviar debriefing en fin de semana');
+
+    // 5. Mantenimiento Nocturno Silencioso (checkNightlyMaintenance: 02:00 - 02:05)
+    let syncCalled = false;
+    let diagCalled = false;
+    scheduler.obsidianService = {
+      syncVaultToVector: async ({ force }) => {
+        syncCalled = true;
+        return { synced: true, count: 8, force };
+      },
+    };
+    scheduler.diagnosticsService = {
+      getSystemStatus: async () => {
+        diagCalled = true;
+        return { status: 'HEALTHY' };
+      },
+    };
+
+    const countBeforeNightly = capturedMessages.length;
+    const nightlyTime = new Date('2026-10-09T02:02:00-06:00');
+    const nightlyResult = await scheduler.checkNightlyMaintenance(nightlyTime);
+    assert.ok(nightlyResult, 'Debe ejecutar mantenimiento nocturno');
+    assert.equal(nightlyResult.success, true);
+    assert.equal(syncCalled, true, 'Debe invocar syncVaultToVector');
+    assert.equal(diagCalled, true, 'Debe invocar getSystemStatus');
+    assert.equal(capturedMessages.length, countBeforeNightly, 'El mantenimiento nocturno debe ser silencioso (cero mensajes Telegram)');
+
+    // Idempotencia nocturna
+    const nightlyRepeat = await scheduler.checkNightlyMaintenance(nightlyTime);
+    assert.equal(nightlyRepeat, null, 'No debe repetir el mantenimiento en la misma fecha');
+
+    // 6. Briefing Matutino Neuronal con IA (checkMorningBrief / triggerMorningBrief)
+    let aiPromptReceived = '';
+    const mockBrainAi = {
+      ai: {
+        models: {
+          generateContent: async ({ contents }) => {
+            aiPromptReceived = contents;
+            return {
+              text: () => '🌅 <b>¡Buenos días, mi líder!</b>\n\nAquí tienes tu panorama para hoy en Deko Labs:\n\n🌤️ Clima agradable.\n📅 Reunión programada.\n\n¡A darlo todo!',
+            };
+          },
+        },
+      },
+    };
+    scheduler.brain = mockBrainAi;
+    scheduler.weatherFetcher = async () => '19°C, Despejado';
+
+    const morningDate = new Date('2026-10-09T07:32:00-06:00');
+    const morningResult = await scheduler.triggerMorningBrief(morningDate);
+    assert.ok(morningResult.includes('¡Buenos días, mi líder!'));
+    assert.ok(morningResult.includes('Deko Labs'));
+    assert.ok(aiPromptReceived.includes('Eres Carmencita'));
+    assert.ok(aiPromptReceived.includes('zalamería reactiva'));
+
+    // Resiliencia: si Gemini falla, usa fallback estructurado
+    const failingBrain = {
+      ai: {
+        models: {
+          generateContent: async () => {
+            throw new Error('Gemini API 503 Unavailable');
+          },
+        },
+      },
+    };
+    scheduler.brain = failingBrain;
+    const fallbackMorningResult = await scheduler.triggerMorningBrief(new Date('2026-10-12T07:32:00-06:00'));
+    assert.ok(fallbackMorningResult.includes('🌅 ¡Buenos días, Sebastián! Carmencita te presenta tu resumen de hoy:'));
+    assert.ok(fallbackMorningResult.includes('19°C, Despejado'));
+    assert.ok(fallbackMorningResult.includes('Reunión de Stand PlaneToys'));
+  });
+
   // Limpieza final
   await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
 });

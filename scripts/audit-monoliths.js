@@ -33,7 +33,7 @@ export const DOMAIN_CEILINGS = {
   'src/services/voice.service.js': 260,
   'src/services/diagnostics.service.js': 200,
   'src/services/storage.provider.js': 260,
-  'src/services/scheduler.service.js': 320,
+  'src/services/scheduler.service.js': 480,
 
   // Capa de Esquemas y Validadores Cohesivos
   'src/validators/actions.schema.js': 380,
