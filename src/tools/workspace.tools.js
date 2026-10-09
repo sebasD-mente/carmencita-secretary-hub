@@ -1,6 +1,6 @@
 import { makeActionResult, synthesizeToolResults } from './index.js';
 
-function formatEventDates(ev) {
+export function formatEventDates(ev) {
   const isAllDay = ev.isAllDay || (typeof ev.start === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.start));
   if (isAllDay) {
     const [y, m, d] = (ev.start || '').split('T')[0].split('-').map(Number);
@@ -8,13 +8,36 @@ function formatEventDates(ev) {
     const day = dObj.toLocaleDateString('es-GT', { weekday: 'short' }), month = dObj.toLocaleDateString('es-GT', { month: 'short' });
     return { summary: `${day}, ${d} ${month} (Todo el día)`, fallback: `📅 <b>${day}, ${d} ${month}</b> | ⏰ <i>Todo el día</i>` };
   }
-  const d = new Date(ev.start);
-  if (!isNaN(d.getTime())) {
-    const day = d.toLocaleDateString('es-GT', { weekday: 'short', timeZone: 'America/Guatemala' });
-    const num = d.toLocaleDateString('es-GT', { day: 'numeric', timeZone: 'America/Guatemala' });
-    const month = d.toLocaleDateString('es-GT', { month: 'short', timeZone: 'America/Guatemala' });
-    const time = d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' });
-    return { summary: `${day}, ${num} ${month} a las ${time}`, fallback: `📅 <b>${day}, ${num} ${month}</b> | ⏰ <b>${time}</b>` };
+
+  const dStart = new Date(ev.start);
+  const dEnd = ev.end ? new Date(ev.end) : null;
+  if (!isNaN(dStart.getTime())) {
+    const tz = 'America/Guatemala';
+    const dayStart = dStart.toLocaleDateString('es-GT', { weekday: 'short', timeZone: tz });
+    const numStart = dStart.toLocaleDateString('es-GT', { day: 'numeric', timeZone: tz });
+    const monthStart = dStart.toLocaleDateString('es-GT', { month: 'short', timeZone: tz });
+    const timeStart = dStart.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: tz });
+
+    if (dEnd && !isNaN(dEnd.getTime())) {
+      const dayEnd = dEnd.toLocaleDateString('es-GT', { weekday: 'short', timeZone: tz });
+      const numEnd = dEnd.toLocaleDateString('es-GT', { day: 'numeric', timeZone: tz });
+      const monthEnd = dEnd.toLocaleDateString('es-GT', { month: 'short', timeZone: tz });
+      const timeEnd = dEnd.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: tz });
+
+      // Si inicia y termina el mismo día
+      if (numStart === numEnd && monthStart === monthEnd) {
+        return {
+          summary: `${dayStart}, ${numStart} ${monthStart} de ${timeStart} a ${timeEnd}`,
+          fallback: `📅 <b>${dayStart}, ${numStart} ${monthStart}</b> | ⏰ <b>${timeStart} - ${timeEnd}</b>`
+        };
+      }
+      // Multi-día (ej: sábado 17 a domingo 18)
+      return {
+        summary: `del ${dayStart}, ${numStart} ${monthStart} (${timeStart}) al ${dayEnd}, ${numEnd} ${monthEnd} (${timeEnd})`,
+        fallback: `📅 <b>${dayStart} ${numStart} ${monthStart} (${timeStart}) ➔ ${dayEnd} ${numEnd} ${monthEnd} (${timeEnd})</b>`
+      };
+    }
+    return { summary: `${dayStart}, ${numStart} ${monthStart} a las ${timeStart}`, fallback: `📅 <b>${dayStart}, ${numStart} ${monthStart}</b> | ⏰ <b>${timeStart}</b>` };
   }
   return { summary: String(ev.start), fallback: `⏰ <b>${ev.start}</b>` };
 }

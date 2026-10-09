@@ -1,5 +1,21 @@
 import { config } from '../config.js';
 
+export function toGuatemalaIso(dateStr, timeZone = 'America/Guatemala') {
+  if (!dateStr) return dateStr;
+  if (dateStr instanceof Date) return dateStr.toISOString();
+  if (typeof dateStr === 'string') {
+    const trimmed = dateStr.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return `${trimmed}T00:00:00-06:00`;
+    }
+    if (/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(trimmed)) {
+      return new Date(trimmed).toISOString();
+    }
+    return new Date(`${trimmed}-06:00`).toISOString();
+  }
+  return new Date(dateStr).toISOString();
+}
+
 export class CalendarService {
   constructor(opts = {}) {
     this.clientId = opts.clientId ?? config.google?.clientId ?? '';
@@ -37,16 +53,17 @@ export class CalendarService {
       throw new Error('Google Calendar no está configurado (falta GOOGLE_REFRESH_TOKEN o cliente OAuth).');
     }
 
-    let endIso = endDateTime;
+    const startIso = toGuatemalaIso(startDateTime, timeZone);
+    let endIso = endDateTime ? toGuatemalaIso(endDateTime, timeZone) : null;
     if (!endIso) {
-      const start = new Date(startDateTime);
-      endIso = !isNaN(start.getTime()) ? new Date(start.getTime() + 60 * 60 * 1000).toISOString() : startDateTime;
+      const startObj = new Date(startIso);
+      endIso = !isNaN(startObj.getTime()) ? new Date(startObj.getTime() + 60 * 60 * 1000).toISOString() : startIso;
     }
 
     if (checkExisting) {
       try {
         let existingEvents = [];
-        const startDateObj = new Date(startDateTime);
+        const startDateObj = new Date(startIso);
         if (!isNaN(startDateObj.getTime())) {
           const dayStart = new Date(startDateObj);
           dayStart.setHours(0, 0, 0, 0);
@@ -73,7 +90,7 @@ export class CalendarService {
             const endVal = typeof existing.end === 'object' ? (existing.end?.dateTime || existing.end?.date) : existing.end;
             return {
               alreadyExisted: true, id: existing.id, summary: existing.summary,
-              start: startVal || startDateTime, end: endVal || endIso,
+              start: startVal || startIso, end: endVal || endIso,
               location: existing.location || location,
               htmlLink: existing.htmlLink || `https://calendar.google.com/calendar/event?eid=${existing.id}`,
               status: 'confirmed',
@@ -87,15 +104,15 @@ export class CalendarService {
 
     const eventResource = {
       summary, description: description || undefined, location: location || undefined,
-      start: { dateTime: new Date(startDateTime).toISOString(), timeZone },
-      end: { dateTime: new Date(endIso).toISOString(), timeZone },
+      start: { dateTime: startIso, timeZone },
+      end: { dateTime: endIso, timeZone },
     };
 
     const res = await calendar.events.insert({ calendarId, requestBody: eventResource });
     const event = res.data;
     return {
       id: event.id, summary: event.summary || summary,
-      start: event.start?.dateTime || startDateTime, end: event.end?.dateTime || endIso,
+      start: event.start?.dateTime || startIso, end: event.end?.dateTime || endIso,
       htmlLink: event.htmlLink || `https://calendar.google.com/calendar/event?eid=${event.id}`,
       status: event.status || 'confirmed',
     };
@@ -235,26 +252,27 @@ export class CalendarService {
 
     if (!targetEventId) throw new Error(`Evento no encontrado${query ? `: "${query}"` : ''}`);
 
-    let endIso = newEndDateTime;
+    const startIso = toGuatemalaIso(newStartDateTime, timeZone);
+    let endIso = newEndDateTime ? toGuatemalaIso(newEndDateTime, timeZone) : null;
     if (!endIso) {
-      const start = new Date(newStartDateTime);
-      endIso = new Date(start.getTime() + 60 * 60 * 1000).toISOString();
+      const startObj = new Date(startIso);
+      endIso = new Date(startObj.getTime() + 60 * 60 * 1000).toISOString();
     }
 
     const res = await calendar.events.patch({
       calendarId,
       eventId: targetEventId,
       requestBody: {
-        start: { dateTime: new Date(newStartDateTime).toISOString(), timeZone },
-        end: { dateTime: new Date(endIso).toISOString(), timeZone },
+        start: { dateTime: startIso, timeZone },
+        end: { dateTime: endIso, timeZone },
       },
     });
 
     return {
       id: res.data.id,
       summary: res.data.summary,
-      start: res.data.start?.dateTime,
-      end: res.data.end?.dateTime,
+      start: res.data.start?.dateTime || startIso,
+      end: res.data.end?.dateTime || endIso,
       htmlLink: res.data.htmlLink,
     };
   }

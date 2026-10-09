@@ -19,7 +19,8 @@ import { setPrismaClient } from '../src/core/prisma.js';
 import { runMigration } from '../scripts/migrate-json-to-prisma.js';
 import { AgyBridge } from '../src/core/agy-bridge.js';
 import { SchedulerService } from '../src/services/scheduler.service.js';
-import { CalendarService } from '../src/services/calendar.service.js';
+import { CalendarService, toGuatemalaIso } from '../src/services/calendar.service.js';
+import { formatEventDates } from '../src/tools/workspace.tools.js';
 import { ContactService } from '../src/services/contact.service.js';
 import { GoogleTasksService } from '../src/services/google-tasks.service.js';
 import { EmbeddingService } from '../src/services/embedding.service.js';
@@ -5351,6 +5352,154 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(capturedContactPrompt.includes('Elena Morales'));
     assert.ok(capturedContactPrompt.includes('50244449999'));
     assert.ok(contactAiResult.reply.includes('Elena Morales'));
+  });
+
+  await t.test('56. Normalización de Zona Horaria (America/Guatemala UTC-6) y Formateo Completo de Rangos en Google Calendar', async () => {
+    // 1. Validar la función pura toGuatemalaIso
+    // Sin offset explícito: asume hora local de Guatemala (-06:00) y normaliza a ISO UTC
+    const guatIsoMorning = toGuatemalaIso('2026-10-17T08:00:00');
+    assert.equal(guatIsoMorning, '2026-10-17T14:00:00.000Z', '8:00 AM Guatemala debe convertirse en 14:00:00.000Z');
+
+    const guatIsoEvening = toGuatemalaIso('2026-10-18T19:00:00');
+    assert.equal(guatIsoEvening, '2026-10-19T01:00:00.000Z', '7:00 PM Guatemala debe convertirse en 01:00:00.000Z del día siguiente');
+
+    // Con offset explícito (-06:00 o Z)
+    assert.equal(toGuatemalaIso('2026-10-17T08:00:00-06:00'), '2026-10-17T14:00:00.000Z');
+    assert.equal(toGuatemalaIso('2026-10-17T14:00:00.000Z'), '2026-10-17T14:00:00.000Z');
+
+    // Fechas tipo 'YYYY-MM-DD'
+    assert.equal(toGuatemalaIso('2026-10-17'), '2026-10-17T00:00:00-06:00');
+
+    // 2. Validar createEvent con zona horaria normalizada en el requestBody a Google Calendar
+    let capturedInsertBody = null;
+    let capturedCalendarId = null;
+    const mockCalendarClient = {
+      events: {
+        insert: async ({ calendarId, requestBody }) => {
+          capturedCalendarId = calendarId;
+          capturedInsertBody = requestBody;
+          return {
+            data: {
+              id: 'cal_event_planetoys_001',
+              summary: requestBody.summary,
+              start: requestBody.start,
+              end: requestBody.end,
+              htmlLink: 'https://calendar.google.com/calendar/event?eid=cal_event_planetoys_001',
+              status: 'confirmed',
+            },
+          };
+        },
+        list: async () => ({ data: { items: [] } }),
+      },
+    };
+
+    const calService = new CalendarService({ calendarClient: mockCalendarClient });
+
+    const createdEvent = await calService.createEvent({
+      summary: 'PlaneToys Stand Setup & Atención al Cliente',
+      startDateTime: '2026-10-17T08:00:00',
+      endDateTime: '2026-10-18T19:00:00',
+      location: 'Parque de la Industria, Salón Guatemala',
+      checkExisting: false,
+    });
+
+    assert.ok(capturedInsertBody, 'Debe haber llamado a calendar.events.insert');
+    assert.equal(capturedInsertBody.summary, 'PlaneToys Stand Setup & Atención al Cliente');
+    // Verificación forense: 8:00 AM Guatemala debe viajar a Google Calendar como 14:00:00.000Z
+    assert.equal(capturedInsertBody.start.dateTime, '2026-10-17T14:00:00.000Z');
+    assert.equal(capturedInsertBody.start.timeZone, 'America/Guatemala');
+    // Verificación forense: 7:00 PM domingo 18 debe viajar como 01:00:00.000Z del lunes 19
+    assert.equal(capturedInsertBody.end.dateTime, '2026-10-19T01:00:00.000Z');
+    assert.equal(capturedInsertBody.end.timeZone, 'America/Guatemala');
+    assert.equal(createdEvent.id, 'cal_event_planetoys_001');
+
+    // 3. Validar rescheduleEvent con zona horaria normalizada
+    let capturedPatchBody = null;
+    let capturedPatchEventId = null;
+    mockCalendarClient.events.patch = async ({ calendarId, eventId, requestBody }) => {
+      capturedPatchEventId = eventId;
+      capturedPatchBody = requestBody;
+      return {
+        data: {
+          id: eventId,
+          summary: 'PlaneToys Stand Setup & Atención al Cliente',
+          start: requestBody.start,
+          end: requestBody.end,
+          htmlLink: 'https://calendar.google.com/calendar/event?eid=' + eventId,
+        },
+      };
+    };
+
+    const rescheduledEvent = await calService.rescheduleEvent({
+      eventId: 'cal_event_planetoys_001',
+      newStartDateTime: '2026-10-17T08:00:00',
+      newEndDateTime: '2026-10-17T19:00:00',
+    });
+
+    assert.equal(capturedPatchEventId, 'cal_event_planetoys_001');
+    assert.equal(capturedPatchBody.start.dateTime, '2026-10-17T14:00:00.000Z');
+    assert.equal(capturedPatchBody.end.dateTime, '2026-10-18T01:00:00.000Z');
+    assert.equal(rescheduledEvent.id, 'cal_event_planetoys_001');
+
+    // 4. Validar formatEventDates para eventos del mismo día y multi-día
+    // A) Mismo día con horario de inicio y fin (ej: sábado 8:00 AM a 5:00 PM)
+    const sameDayFormatted = formatEventDates({
+      summary: 'Sesión de Fotografía Comercial',
+      start: '2026-10-17T14:00:00.000Z', // 8:00 AM Guatemala
+      end: '2026-10-17T23:00:00.000Z',   // 5:00 PM Guatemala
+    });
+    assert.ok(sameDayFormatted.summary.includes('17 oct'), 'Debe incluir día y mes');
+    assert.ok(sameDayFormatted.summary.includes('08:00') && sameDayFormatted.summary.includes('05:00'), 'Debe mostrar inicio y fin');
+    assert.ok(sameDayFormatted.summary.includes(' de ') && sameDayFormatted.summary.includes(' a '), 'Debe usar formato "de X a Y"');
+    assert.ok(sameDayFormatted.fallback.includes('08:00') && sameDayFormatted.fallback.includes('05:00'), 'Fallback debe incluir rango de hora');
+
+    // B) Multi-día (ej: PlaneToys sábado 8:00 AM a domingo 7:00 PM)
+    const multiDayFormatted = formatEventDates({
+      summary: 'PlaneToys Expo Fin de Semana',
+      start: '2026-10-17T14:00:00.000Z', // Sáb 17 oct 8:00 AM Guatemala
+      end: '2026-10-19T01:00:00.000Z',   // Dom 18 oct 7:00 PM Guatemala
+    });
+    assert.ok(multiDayFormatted.summary.startsWith('del '), 'Multi-día debe iniciar con "del "');
+    assert.ok(multiDayFormatted.summary.includes('17 oct') && multiDayFormatted.summary.includes('18 oct'), 'Debe incluir ambos días');
+    assert.ok(multiDayFormatted.summary.includes('08:00') && multiDayFormatted.summary.includes('07:00'), 'Debe incluir ambas horas');
+    assert.ok(multiDayFormatted.fallback.includes('➔'), 'Fallback multi-día debe incluir la flecha direccional');
+
+    // C) Evento sin fin (solo inicio)
+    const singleTimeFormatted = formatEventDates({
+      summary: 'Check-in Rápido',
+      start: '2026-10-17T14:00:00.000Z',
+    });
+    assert.ok(singleTimeFormatted.summary.includes('a las 08:00'), 'Sin fin debe indicar "a las XX:XX"');
+
+    // D) Evento todo el día
+    const allDayFormatted = formatEventDates({
+      summary: 'Día de la Raza / Feriado',
+      start: '2026-10-12',
+      isAllDay: true,
+    });
+    assert.ok(allDayFormatted.summary.includes('(Todo el día)'), 'Debe indicar Todo el día');
+
+    // 5. Integración con LIST_CALENDAR_EVENTS: reporte transparente del rango en fallback y summary
+    const listResult = await executeAction(
+      { action: 'LIST_CALENDAR_EVENTS', range: 'UPCOMING' },
+      {
+        calendarService: {
+          listUpcomingEvents: async () => [
+            {
+              id: 'ev_plane_multi',
+              summary: 'PlaneToys Stand Setup',
+              start: '2026-10-17T14:00:00.000Z',
+              end: '2026-10-19T01:00:00.000Z',
+              location: 'Parque de la Industria',
+            },
+          ],
+        },
+      }
+    );
+
+    assert.ok(listResult.reply.includes('PlaneToys Stand Setup'));
+    assert.ok(listResult.reply.includes('17 oct') && listResult.reply.includes('18 oct'), 'La agenda debe reportar que abarca del 17 al 18 de octubre');
+    assert.ok(listResult.reply.includes('➔'), 'La lista debe formatear con elegancia el rango multi-día');
   });
 
   // Limpieza final
