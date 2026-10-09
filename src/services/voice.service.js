@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config.js';
+import { PresentationFormatter } from '../presentation/formatter.js';
 
 export class VoiceService {
   constructor(deps = {}) {
@@ -14,21 +15,7 @@ export class VoiceService {
    * Limpia el texto de markdown, enlaces, bloques de código y emojis para que la dicción sea 100% fluida
    */
   _cleanTextForSpeech(rawText) {
-    if (!rawText || typeof rawText !== 'string') return '';
-    return rawText
-      // Eliminar bloques JSON de acciones
-      .replace(/```(?:json)?[\s\S]*?```/gi, '')
-      .replace(/\{"action"[\s\S]*?\}/gi, '')
-      // Eliminar etiquetas HTML
-      .replace(/<[^>]+>/g, '')
-      // Eliminar sintaxis markdown (negritas, cursivas, encabezados, viñetas)
-      .replace(/[*_~`#]/g, '')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Enlaces: conservar solo el texto visible
-      // Normalizar guiones
-      .replace(/[•–—]/g, '-')
-      // Colapsar espacios múltiples y saltos
-      .replace(/\s+/g, ' ')
-      .trim();
+    return PresentationFormatter.formatForVoice(rawText);
   }
 
   /**

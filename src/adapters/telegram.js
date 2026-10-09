@@ -1,5 +1,6 @@
 import { Bot, InputFile } from 'grammy';
 import { config } from '../config.js';
+import { PresentationFormatter } from '../presentation/formatter.js';
 
 export class TelegramAdapter {
   constructor(brainService, storageService = null) {
@@ -50,7 +51,8 @@ export class TelegramAdapter {
   }
 
   async _safeReply(ctx, text) {
-    const str = String(text || '');
+    const formatted = PresentationFormatter.formatForTelegram(text);
+    const str = String(formatted || '');
     const maxLength = 3900;
     if (str.length <= maxLength) {
       await this._sendSingleChunk(ctx, str);

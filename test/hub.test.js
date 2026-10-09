@@ -13,6 +13,7 @@ import { IdeaService } from '../src/services/idea.service.js';
 import { ExcelService } from '../src/services/excel.service.js';
 import { CarmencitaBrain } from '../src/core/brain.js';
 import { CARMENCITA_SYSTEM_PROMPT, TOOL_SYNTHESIS_PROMPT } from '../src/core/carmencita.prompt.js';
+import { PresentationFormatter } from '../src/presentation/formatter.js';
 import { TelegramAdapter } from '../src/adapters/telegram.js';
 import { WhatsAppAdapter } from '../src/adapters/whatsapp.js';
 import { registerRoutes } from '../src/routes/webhooks.js';
@@ -903,9 +904,9 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
 
     // Validar directivas en el System Prompt
     const systemPrompt = brain.getSystemPrompt();
-    assert.ok(systemPrompt.includes('ARQUITECTURA DE CEREBRO DUAL'));
-    assert.ok(systemPrompt.includes('MODO CREATIVO & ESTRATÉGICO (DESATADO)'));
-    assert.ok(systemPrompt.includes('Cero restricciones factuales'));
+    assert.ok(systemPrompt.includes('Chief of Staff'), 'Debe definir rol Chief of Staff');
+    assert.ok(systemPrompt.includes('EL DOBLE SOMBRERO DE SEBASTIÁN'), 'Debe incluir el doble sombrero');
+    assert.ok(systemPrompt.includes('Deco Vintage') && systemPrompt.includes('DeKo Labs'), 'Debe mapear ambos ecosistemas');
 
     // Ejecución de consulta creativa
     const result = await brain.processTextMessage({
@@ -916,7 +917,7 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     });
 
     assert.ok(capturedPrompt.includes('Dame 3 ideas creativas para iluminar el stand vintage'));
-    assert.ok(capturedInstruction.includes('MODO CREATIVO & ESTRATÉGICO'));
+    assert.ok(capturedInstruction.includes('DOBLE SOMBRERO'), 'Debe inyectar directiva de ecosistema');
     assert.ok(result.reply.includes('Lámparas Edison con Filamento Expuesto'));
     assert.ok(result.reply.includes('Reflectores Direccionales'));
   });
@@ -1584,12 +1585,11 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
       ai: mockAiTime,
     });
 
-    // 1. Verificar directiva temporal en System Prompt
+    // 1. Verificar directiva afirmativa en System Prompt
     const systemPrompt = brainTime.getSystemPrompt();
-    assert.ok(systemPrompt.includes('DIRECTIVA DE TIEMPO Y PROGRAMACIÓN DE RECORDATORIOS (SAVE_TASK)'));
-    assert.ok(systemPrompt.includes('Conoces la fecha y hora actual exacta en Guatemala'));
-    assert.ok(systemPrompt.includes('calcula matemáticamente la fecha y hora exacta absoluta'));
-    assert.ok(systemPrompt.includes('YYYY-MM-DDTHH:mm:ss'));
+    assert.ok(systemPrompt.includes('Chief of Staff'), 'Debe definir rol Chief of Staff');
+    assert.ok(systemPrompt.includes('PRINCIPIO RECTOR'), 'Debe incluir Principio Rector');
+    assert.ok(systemPrompt.includes('herramientas nativas'), 'Debe basarse en herramientas nativas');
 
     // 2. Ejecutar procesamiento de texto y validar inyección de reloj en contextPrompt
     await brainTime.processTextMessage({
@@ -3088,13 +3088,11 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     });
     assert.ok(emptyResult.reply.includes('no encontré notas con el término "Inexistente"'));
 
-    // 11. Blindaje Anti-AGY en el System Prompt
+    // 11. Resolución Nativa y Purificación en el System Prompt
     const systemPrompt = brain.getSystemPrompt();
-    assert.ok(systemPrompt.includes('PROHIBIDO terminantemente emitir RUN_AGY_TASK para consultar, listar o buscar notas en Obsidian'));
-    assert.ok(systemPrompt.includes('00_Meta'));
-    assert.ok(systemPrompt.includes('01_Inbox'));
-    assert.ok(systemPrompt.includes('02_Projects'));
-    assert.ok(systemPrompt.includes('03_Areas'));
+    assert.ok(systemPrompt.includes('herramientas nativas'), 'Debe instruir resolver con herramientas nativas');
+    assert.ok(!systemPrompt.includes('PROHIBIDO'), 'No debe contener palabras punitivas');
+    assert.ok(systemPrompt.includes('Chief of Staff'), 'Debe definir rol Chief of Staff');
   });
 
   await t.test('36. Erradicación de Errores Crudos en RUN_AGY_TASK: Síntesis Humana Natural y Preservación Forense en MessageLog', async () => {
@@ -5529,11 +5527,10 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(cleanedSpaced.includes('Aquí está el detalle.\n\n¿Deseas algo más?'));
 
     // 4. Validar directivas de CARMENCITA_SYSTEM_PROMPT
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('ZALAMERÍA REACTIVA Y DINAMISMO VOCAL (ESPEJO DE CONFIANZA):'), 'Debe incluir la sección de zalamería reactiva');
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('PROHIBIDO repetir "Sebastián querido" como muletilla fija'), 'Debe prohibir la muletilla fija');
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Sebas') && CARMENCITA_SYSTEM_PROMPT.includes('jefecito lindo') && CARMENCITA_SYSTEM_PROMPT.includes('mi jefe consentido'), 'Debe sugerir variedad de apelativos');
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('ESTÉTICA VISUAL Y FORMATO DE CHAT MÓVIL (CERO VÓMITO DE TEXTO):'), 'Debe incluir directivas de formato móvil');
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('CERO ASTERISCOS DE MARKDOWN'), 'Debe prohibir asteriscos en el prompt');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('ZALAMERÍA REACTIVA Y TONO:'), 'Debe incluir la sección de zalamería reactiva');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Sebas') && CARMENCITA_SYSTEM_PROMPT.includes('mi jefe consentido') && CARMENCITA_SYSTEM_PROMPT.includes('jefe querido'), 'Debe sugerir variedad de apelativos');
+    assert.ok(!CARMENCITA_SYSTEM_PROMPT.includes('PROHIBIDO'), 'No debe contener palabras punitivas');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Chief of Staff'), 'Debe definir rol Chief of Staff');
 
     // 5. Validar directivas de TOOL_SYNTHESIS_PROMPT
     const sampleSynthesis = TOOL_SYNTHESIS_PROMPT('resumen de correos', 'Gmail', '[Correo 1] De: Proveedor | Asunto: Cotización');
@@ -5852,23 +5849,11 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(diagResult.reply.includes('☁️ <b>Google Workspace:</b>'));
     assert.ok(diagResult.reply.includes('⚠️ <b>Últimos eventos de error registrados (1):</b>\n• <code>EAI_AGAIN DNS temporary error</code>'));
 
-    // 5. Validar que CARMENCITA_SYSTEM_PROMPT y TOOL_SYNTHESIS_PROMPT contengan explícitamente la LEY UNIVERSAL DE AIRE VISUAL Y SEPARACIÓN DE IDEAS
-    assert.ok(
-      CARMENCITA_SYSTEM_PROMPT.includes('LEY UNIVERSAL DE AIRE VISUAL Y SEPARACIÓN DE IDEAS'),
-      'CARMENCITA_SYSTEM_PROMPT debe contener la Ley Universal de Aire Visual'
-    );
-    assert.ok(
-      CARMENCITA_SYSTEM_PROMPT.includes('CERO LISTAS CORRIDAS EN UN SOLO PÁRRAFO'),
-      'CARMENCITA_SYSTEM_PROMPT debe prohibir listas corridas en un solo párrafo'
-    );
-    assert.ok(
-      CARMENCITA_SYSTEM_PROMPT.includes('LISTADOS CON VIÑETAS INDEPENDIENTES Y AIRE'),
-      'CARMENCITA_SYSTEM_PROMPT debe exigir viñetas independientes con aire'
-    );
-    assert.ok(
-      CARMENCITA_SYSTEM_PROMPT.includes('PÁRRAFOS ULTRA CORTOS'),
-      'CARMENCITA_SYSTEM_PROMPT debe exigir párrafos ultra cortos'
-    );
+    // 5. Validar que PresentationFormatter y TOOL_SYNTHESIS_PROMPT garanticen la LEY UNIVERSAL DE AIRE VISUAL Y SEPARACIÓN DE IDEAS
+    const formattedAir = PresentationFormatter.formatForTelegram('Primera idea.\nSegunda idea.');
+    assert.ok(formattedAir.includes('Primera idea.\n\nSegunda idea.'), 'PresentationFormatter debe garantizar aire visual con doble salto');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('PRINCIPIO RECTOR'), 'CARMENCITA_SYSTEM_PROMPT debe contener Principio Rector afirmativo');
+    assert.ok(!CARMENCITA_SYSTEM_PROMPT.includes('PROHIBIDO'), 'CARMENCITA_SYSTEM_PROMPT debe tener 0 palabras punitivas');
 
     const testToolSynthesisPrompt = TOOL_SYNTHESIS_PROMPT(
       'resumen de obsidian',
