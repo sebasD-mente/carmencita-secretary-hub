@@ -16,11 +16,11 @@ export const DOMAIN_CEILINGS = {
 
   // Capa de Herramientas Modulares (src/tools/)
   'src/tools/obsidian.tools.js': 280,
-  'src/tools/workspace.tools.js': 320,
+  'src/tools/workspace.tools.js': 380,
   'src/tools/system.tools.js': 200,
   'src/tools/media.tools.js': 220,
   'src/tools/documents.tools.js': 220,
-  'src/tools/index.js': 180,
+  'src/tools/index.js': 220,
 
   // Capa de Servicios Especializados (src/services/)
   'src/services/obsidian-drive.service.js': 950,

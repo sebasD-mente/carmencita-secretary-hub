@@ -36,6 +36,7 @@ export class CalendarService {
     location = '',
     calendarId = 'primary',
     timeZone = 'America/Guatemala',
+    checkExisting = true,
   }) {
     const calendar = await this._getCalendarClient();
     if (!calendar) {
@@ -49,6 +50,54 @@ export class CalendarService {
         endIso = new Date(start.getTime() + 60 * 60 * 1000).toISOString();
       } else {
         endIso = startDateTime;
+      }
+    }
+
+    if (checkExisting) {
+      try {
+        let existingEvents = [];
+        const startDateObj = new Date(startDateTime);
+        if (!isNaN(startDateObj.getTime())) {
+          const dayStart = new Date(startDateObj);
+          dayStart.setHours(0, 0, 0, 0);
+          const dayEnd = new Date(startDateObj);
+          dayEnd.setHours(23, 59, 59, 999);
+          existingEvents = await this.getEventsForDateRange({
+            startDate: dayStart.toISOString(),
+            endDate: dayEnd.toISOString(),
+            calendarId,
+            timeZone,
+          });
+        }
+        if (!existingEvents || existingEvents.length === 0) {
+          existingEvents = await this.listUpcomingEvents({ maxResults: 30, calendarId });
+        }
+
+        const normalize = (str) => (str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
+        const targetNorm = normalize(summary);
+        if (targetNorm && existingEvents && existingEvents.length > 0) {
+          const existing = existingEvents.find((ev) => {
+            const evNorm = normalize(ev.summary);
+            return evNorm && (evNorm.includes(targetNorm) || targetNorm.includes(evNorm));
+          });
+
+          if (existing) {
+            const startVal = typeof existing.start === 'object' ? (existing.start?.dateTime || existing.start?.date) : existing.start;
+            const endVal = typeof existing.end === 'object' ? (existing.end?.dateTime || existing.end?.date) : existing.end;
+            return {
+              alreadyExisted: true,
+              id: existing.id,
+              summary: existing.summary,
+              start: startVal || startDateTime,
+              end: endVal || endIso,
+              location: existing.location || location,
+              htmlLink: existing.htmlLink || `https://calendar.google.com/calendar/event?eid=${existing.id}`,
+              status: 'confirmed',
+            };
+          }
+        }
+      } catch (checkErr) {
+        console.warn('[CalendarService] Error verificando eventos existentes:', checkErr.message);
       }
     }
 

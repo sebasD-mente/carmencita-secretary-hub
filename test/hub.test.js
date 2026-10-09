@@ -29,6 +29,7 @@ import { MediaService } from '../src/services/media.service.js';
 import { VoiceService } from '../src/services/voice.service.js';
 import { DiagnosticsService, sanitizeLogLine } from '../src/services/diagnostics.service.js';
 import { cleanupObsidianDrive } from '../scripts/cleanup-obsidian-drive.js';
+import { sanitizeReplyText, executeAction } from '../src/tools/index.js';
 import {
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
@@ -4998,6 +4999,124 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(deletedFileIds.includes('file_0_byte_orphan'), 'Debe haber eliminado la nota huérfana de 0 bytes');
     assert.ok(deletedFileIds.includes('file_dup_old'), 'Debe haber eliminado el duplicado antiguo');
     assert.equal(mockCleanupObsidianService._vaultCache.timestamp, 0, 'La caché debe haber sido invalidada tras la limpieza');
+  });
+
+  await t.test('54. Chaining Multi-Paso, Sanitización Anti-Fuga de JSON y Resolución de Eventos en Gmail y Calendar', async () => {
+    // 1. Prueba Unitaria de sanitizeReplyText
+    const rawWithCodeBlock = `Sebastián querido, encontré los datos del DevFest Guatemala 2026. Se realizará el 24 de octubre en el Hotel Tikal Futura.\n\n\`\`\`json\n{\n  "action": "CREATE_CALENDAR_EVENT",\n  "summary": "DevFest Guatemala 2026",\n  "startDateTime": "2026-10-24T08:00:00-06:00"\n}\n\`\`\`\n\n¿Deseas que prepare algo más?`;
+    const sanitized1 = sanitizeReplyText(rawWithCodeBlock);
+    assert.ok(!sanitized1.includes('```json'), 'No debe contener bloques ```json');
+    assert.ok(!sanitized1.includes('"action"'), 'No debe contener la palabra action de código');
+    assert.ok(sanitized1.includes('DevFest Guatemala 2026'), 'Debe preservar el contenido del mensaje');
+    assert.ok(sanitized1.includes('24 de octubre'));
+    assert.ok(sanitized1.includes('¿Deseas que prepare algo más?'));
+
+    const rawWithLooseJson = `Sebastián querido, aquí tienes el dato: { "action": "CREATE_CALENDAR_EVENT", "summary": "DevFest" }\n\n\n\nQuedó todo listo.`;
+    const sanitized2 = sanitizeReplyText(rawWithLooseJson);
+    assert.ok(!sanitized2.includes('{ "action"'), 'Debe remover objetos JSON sueltos con action');
+    assert.ok(!sanitized2.includes('\n\n\n'), 'Debe colapsar saltos de línea triples');
+    assert.ok(sanitized2.includes('Quedó todo listo.'));
+
+    // 2. Prevención de Duplicados en CalendarService.createEvent (checkExisting: true)
+    let insertCalled = false;
+    const mockCalClient = {
+      events: {
+        list: async () => ({
+          data: {
+            items: [
+              {
+                id: 'existing_devfest_id',
+                summary: 'DevFest Guatemala 2026',
+                start: { dateTime: '2026-10-24T08:00:00-06:00' },
+                end: { dateTime: '2026-10-24T17:00:00-06:00' },
+                location: 'Grand Tikal Futura Hotel',
+                htmlLink: 'https://calendar.google.com/calendar/event?eid=existing_devfest_id',
+              },
+            ],
+          },
+        }),
+        insert: async () => {
+          insertCalled = true;
+          return { data: { id: 'new_event_id' } };
+        },
+      },
+    };
+
+    const calService = new CalendarService({ calendarClient: mockCalClient });
+
+    // Intento de crear evento con título equivalente (variación de mayúsculas/tildes)
+    const dupResult = await calService.createEvent({
+      summary: 'devfest guatemala 2026',
+      startDateTime: '2026-10-24T08:00:00-06:00',
+      endDateTime: '2026-10-24T17:00:00-06:00',
+      location: 'Grand Tikal Futura Hotel',
+      checkExisting: true,
+    });
+
+    assert.equal(insertCalled, false, 'NO debe llamar a events.insert si el evento ya existe');
+    assert.equal(dupResult.alreadyExisted, true);
+    assert.equal(dupResult.id, 'existing_devfest_id');
+    assert.equal(dupResult.htmlLink, 'https://calendar.google.com/calendar/event?eid=existing_devfest_id');
+
+    // 3. Lectura Profunda en CHECK_GMAIL para Eventos (Extracción de bodyText)
+    let emailDetailsIdRequested = null;
+    let dataSummaryCaptured = null;
+
+    const mockEventGmailService = {
+      searchEmails: async () => [
+        {
+          id: 'msg_devfest_101',
+          date: 'Tue, 22 Sep 2026 14:30:00 -0600',
+          from: 'GDG Guatemala <organizers@gdgguatemala.com>',
+          subject: 'Confirmación de tu entrada para DevFest Guatemala 2026',
+          snippet: 'Gracias por registrarte para el evento en septiembre...',
+        },
+      ],
+      getEmailDetails: async ({ messageId }) => {
+        emailDetailsIdRequested = messageId;
+        return {
+          id: messageId,
+          from: 'GDG Guatemala <organizers@gdgguatemala.com>',
+          subject: 'Confirmación de tu entrada para DevFest Guatemala 2026',
+          date: 'Tue, 22 Sep 2026 14:30:00 -0600',
+          bodyText: '¡Hola Sebastián! Tu entrada está confirmada. El evento presencial se llevará a cabo el sábado 24 de octubre de 2026 en el Grand Tikal Futura Hotel de 08:00 a 17:00 horas.',
+        };
+      },
+    };
+
+    const mockSynthDeps = {
+      gmailService: mockEventGmailService,
+      calendarService: calService,
+      synthesizeToolResults: async ({ userText, toolName, dataSummary }) => {
+        dataSummaryCaptured = dataSummary;
+        return `Sebastián querido, revisé el correo del DevFest Guatemala. La fecha del evento es el sábado 24 de octubre de 2026 en el Grand Tikal Futura Hotel.\n\n\`\`\`json\n{\n  "action": "CREATE_CALENDAR_EVENT",\n  "summary": "DevFest Guatemala 2026",\n  "startDateTime": "2026-10-24T08:00:00-06:00",\n  "endDateTime": "2026-10-24T17:00:00-06:00",\n  "location": "Grand Tikal Futura Hotel"\n}\n\`\`\``;
+      },
+    };
+
+    // 4. Chaining Multi-Paso: CHECK_GMAIL encadenado con CREATE_CALENDAR_EVENT
+    const chainedResult = await executeAction(
+      { action: 'CHECK_GMAIL', query: 'DevFest Guate' },
+      mockSynthDeps,
+      { userText: 'Al de Xela no voy a poder ir busca el dato del de Guate, y marcalo tambien en mi calendario' }
+    );
+
+    // Verificaciones de lectura profunda
+    assert.equal(emailDetailsIdRequested, 'msg_devfest_101', 'Debe haber solicitado el detalle del correo para evento');
+    assert.ok(dataSummaryCaptured.includes('[Correo Detallado]'), 'dataSummary debe incluir el tag de Correo Detallado');
+    assert.ok(dataSummaryCaptured.includes('sábado 24 de octubre de 2026'), 'dataSummary debe incluir la fecha real del evento del cuerpo');
+
+    // Verificaciones de Chaining y Sanitización Anti-Fuga
+    assert.ok(!chainedResult.reply.includes('```json'), 'El mensaje final NUNCA debe contener ```json');
+    assert.ok(!chainedResult.reply.includes('"action"'), 'El mensaje final NUNCA debe contener sintaxis de código "action"');
+    assert.ok(chainedResult.reply.includes('24 de octubre de 2026'), 'Debe incluir el resumen del correo');
+    assert.ok(chainedResult.reply.includes('¡El espacio ya se encuentra reservado en tu Google Calendar!'), 'Debe reportar que el evento ya estaba reservado');
+    assert.ok(chainedResult.reply.includes('https://calendar.google.com/calendar/event?eid=existing_devfest_id'), 'Debe incluir el enlace de Calendar');
+
+    // Verificaciones de estado consolidado
+    assert.equal(chainedResult.hasGmailEmails, true, 'Debe conservar hasGmailEmails');
+    assert.equal(chainedResult.hasCalendarEvent, true, 'Debe reflejar hasCalendarEvent de la acción secundaria');
+    assert.equal(chainedResult.calendarEvent.alreadyExisted, true, 'Debe reflejar que el evento ya existía');
+    assert.equal(chainedResult.calendarEvent.id, 'existing_devfest_id');
   });
 
   // Limpieza final

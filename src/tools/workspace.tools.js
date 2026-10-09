@@ -106,22 +106,28 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
     const onlyImportant = isSpecificQuery ? (parsedAction.onlyImportant === true) : true;
     let emails = [], emailError = null, emailDetail = null;
 
+    const userText = context.userText || '';
+    const isExplicitSingle = Boolean(
+      parsedAction.readSingle === true || parsedAction.maxResults === 1 ||
+      /(?:leer|escuchar|abrir|detalle(?:\s+del)?|resumen(?:\s+en\s+audio)?\s+del?)\s+(?:el|este|un|ese)\s+(?:correo|email|mensaje)/i.test(userText) ||
+      /del\s+correo\s+de\b/i.test(userText) || /\b(?:el|este)\s+correo\s+(?:de|con|sobre)\b/i.test(userText)
+    );
+
+    const eventTermsRegex = /\b(?:evento|fechas?|entradas?|tickets?|confirmaci[oó]n|cu[aá]ndo|devfest|agendas?|citas?|calendarios?)\b/i;
+    const isEventQuery = eventTermsRegex.test(`${userText} ${parsedAction.query || ''}`);
+
     if (deps.gmailService) {
       try {
         emails = typeof deps.gmailService.searchEmails === 'function'
           ? await deps.gmailService.searchEmails({ query: parsedAction.query || '', maxResults, onlyImportant, includeRead: isSpecificQuery })
           : (typeof deps.gmailService.getUnreadInboxMessages === 'function' ? await deps.gmailService.getUnreadInboxMessages({ maxResults, query: parsedAction.query, onlyImportant }) : []);
 
-        const userText = context.userText || '';
-        const isExplicitSingle = Boolean(
-          parsedAction.readSingle === true || parsedAction.maxResults === 1 ||
-          /(?:leer|escuchar|abrir|detalle(?:\s+del)?|resumen(?:\s+en\s+audio)?\s+del?)\s+(?:el|este|un|ese)\s+(?:correo|email|mensaje)/i.test(userText) ||
-          /del\s+correo\s+de\b/i.test(userText) || /\b(?:el|este)\s+correo\s+(?:de|con|sobre)\b/i.test(userText)
-        );
-
-        if (emails.length > 0 && isExplicitSingle && typeof deps.gmailService.getEmailDetails === 'function') {
-          try { emailDetail = await deps.gmailService.getEmailDetails({ messageId: emails[0].id }); }
-          catch (detErr) { console.warn('[Brain Gmail] No se pudo obtener detalle del correo:', detErr.message); }
+        if (emails.length > 0 && (isExplicitSingle || isEventQuery) && typeof deps.gmailService.getEmailDetails === 'function') {
+          try {
+            emailDetail = await deps.gmailService.getEmailDetails({ messageId: emails[0].id });
+          } catch (detErr) {
+            console.warn('[Brain Gmail] No se pudo obtener detalle del correo:', detErr.message);
+          }
         }
       } catch (err) {
         console.error('[Brain] Error consultando Gmail:', err.message);
@@ -136,15 +142,27 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
       emailReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude consultar tu bandeja de Gmail: ${emailError}`;
     } else if (emails.length === 0) {
       emailReply = `${cleanText ? cleanText + '\n\n' : ''}✉️ <b>Bandeja de Gmail:</b>\n\n• ¡Bandeja limpia! No tienes correos pendientes sin leer.`;
-    } else if (emailDetail) {
+    } else if (emailDetail && isExplicitSingle && !isEventQuery) {
       const fromClean = emailDetail.from ? emailDetail.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
       const bodySnippet = emailDetail.bodyText ? emailDetail.bodyText.slice(0, 500).replace(/\s+/g, ' ') : (emailDetail.snippet || '');
       emailReply = `Sebastián querido, aquí tengo el correo de ${fromClean} con asunto "${emailDetail.subject}":\n\n📌 <b>Resumen Ejecutivo:</b>\n${bodySnippet}${emailDetail.bodyText && emailDetail.bodyText.length > 500 ? '...' : ''}\n\n¿Deseas que prepare una respuesta o realice alguna acción con este correo?`;
     } else {
-      const dataSummary = emails.map((em, i) => `[Correo ${i + 1}] Fecha: ${em.date} | De: ${em.from} | Asunto: ${em.subject} | Fragmento: ${em.snippet}`).join('\n');
+      let dataSummary = '';
+      if (isEventQuery && emailDetail?.bodyText) {
+        const bodyExcerpt = emailDetail.bodyText.slice(0, 1500).replace(/\s+/g, ' ');
+        const first = emails[0];
+        const detailedFirst = `[Correo Detallado] Asunto: ${emailDetail.subject || first.subject} | De: ${emailDetail.from || first.from} | Fecha Recibido: ${emailDetail.date || first.date} | Contenido del Correo: ${bodyExcerpt}`;
+        const rest = emails.slice(1).map((em, i) => `[Correo ${i + 2}] Fecha: ${em.date} | De: ${em.from} | Asunto: ${em.subject} | Fragmento: ${em.snippet}`).join('\n');
+        dataSummary = rest ? `${detailedFirst}\n${rest}` : detailedFirst;
+      } else {
+        dataSummary = emails.map((em, i) => `[Correo ${i + 1}] Fecha: ${em.date} | De: ${em.from} | Asunto: ${em.subject} | Fragmento: ${em.snippet}`).join('\n');
+      }
+
       emailReply = await synthesizeToolResults(deps, {
         userText: context.userText || parsedAction.query || 'consulta de correos',
-        toolName: 'Gmail', dataSummary, context,
+        toolName: 'Gmail',
+        dataSummary,
+        context,
       });
     }
 
@@ -168,8 +186,12 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
     try {
       if (deps.calendarService && typeof deps.calendarService.createEvent === 'function') {
         eventResult = await deps.calendarService.createEvent({
-          summary: parsedAction.summary, description: parsedAction.description,
-          startDateTime: parsedAction.startDateTime, endDateTime: parsedAction.endDateTime, location: parsedAction.location,
+          summary: parsedAction.summary,
+          description: parsedAction.description,
+          startDateTime: parsedAction.startDateTime,
+          endDateTime: parsedAction.endDateTime,
+          location: parsedAction.location,
+          checkExisting: true,
         });
       }
     } catch (calErr) {
@@ -178,13 +200,21 @@ export async function handleWorkspaceAction(parsedAction, deps, context = {}) {
     }
 
     const link = eventResult?.htmlLink || 'https://calendar.google.com';
-    const calendarReply = eventResult
-      ? `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡Cita agendada en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Inicio:</b> ${eventResult.start}\n${eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : ''}${parsedAction.location ? `📍 <b>Ubicación:</b> ${parsedAction.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`
-      : `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude sincronizar con Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
+    let calendarReply = '';
+    if (eventResult?.alreadyExisted) {
+      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡El espacio ya se encuentra reservado en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Fecha/Hora:</b> ${eventResult.start}\n${eventResult.location ? `📍 <b>Ubicación:</b> ${eventResult.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
+    } else if (eventResult) {
+      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}📅 <b>¡Cita agendada en tu Google Calendar!</b>\n\n📌 <b>Evento:</b> ${eventResult.summary}\n⏰ <b>Inicio:</b> ${eventResult.start}\n${eventResult.end ? `🏁 <b>Fin:</b> ${eventResult.end}\n` : ''}${parsedAction.location ? `📍 <b>Ubicación:</b> ${parsedAction.location}\n` : ''}🔗 <a href="${link}">Ver evento en Google Calendar</a>`;
+    } else {
+      calendarReply = `${cleanText ? cleanText + '\n\n' : ''}⚠️ No pude sincronizar con Google Calendar (${errorMsg || 'Servicio no disponible'}).`;
+    }
 
     return makeActionResult({
-      reply: calendarReply, hasCalendarEvent: Boolean(eventResult), calendarEvent: eventResult,
-      actionData: parsedAction, fullHistoryText: `${cleanText}\n[Evento agendado en Google Calendar: ${parsedAction.summary} (${link})]`,
+      reply: calendarReply,
+      hasCalendarEvent: Boolean(eventResult),
+      calendarEvent: eventResult,
+      actionData: parsedAction,
+      fullHistoryText: `${cleanText}\n[Evento ${eventResult?.alreadyExisted ? 'ya existente' : 'agendado'} en Google Calendar: ${parsedAction.summary} (${link})]`,
     });
   }
 
