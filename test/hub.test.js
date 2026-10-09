@@ -32,6 +32,8 @@ import { VoiceService } from '../src/services/voice.service.js';
 import { DiagnosticsService, sanitizeLogLine } from '../src/services/diagnostics.service.js';
 import { cleanupObsidianDrive } from '../scripts/cleanup-obsidian-drive.js';
 import { sanitizeReplyText, executeAction } from '../src/tools/index.js';
+import { handleObsidianAction } from '../src/tools/obsidian.tools.js';
+import { handleSystemAction } from '../src/tools/system.tools.js';
 import {
   SaveMemoryActionSchema,
   SaveObsidianNoteActionSchema,
@@ -4958,7 +4960,7 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.equal(diagResult.diagnostics.database.status, 'CONNECTED');
     assert.ok(diagResult.reply.includes('Diagnóstico de Salud'));
     assert.ok(diagResult.reply.includes('Uptime:'));
-    assert.ok(diagResult.reply.includes('PostgreSQL: Conectada'));
+    assert.ok(diagResult.reply.includes('PostgreSQL:</b> Conectada') || diagResult.reply.includes('PostgreSQL: Conectada'));
 
     // 4. Prueba del Script de Limpieza en Google Drive: cleanupObsidianDrive
     const mockDriveFiles = [
@@ -5740,6 +5742,151 @@ test('Carmencita Secretary Hub - Suite de Elevación Deko Labs Enterprise', asyn
     assert.ok(fallbackMorningResult.includes('🌅 ¡Buenos días, Sebastián! Carmencita te presenta tu resumen de hoy:'));
     assert.ok(fallbackMorningResult.includes('19°C, Despejado'));
     assert.ok(fallbackMorningResult.includes('Reunión de Stand PlaneToys'));
+  });
+
+  await t.test('59. Ley Universal de Aire Visual, Separación de Ideas y Cero Vómitos en Toda Respuesta (Obsidian, Sanitizer y Fallbacks)', async () => {
+    // 1. Validar que SEARCH_OBSIDIAN_NOTES invoque synthesizeToolResults cuando hay IA disponible
+    let synthesisCalled = false;
+    let synthesisPayload = null;
+
+    const mockObsidianNotes = [
+      { cleanTitle: 'Fred - Lead Software Engineer', name: 'Fred - Lead Software Engineer.md', folderPath: '03_Areas/Deko Labs', snippet: 'Fred es el ejecutor principal de ingeniería en Carmencita Hub.' },
+      { cleanTitle: 'Gary - CTO', name: 'Gary - CTO.md', folderPath: '03_Areas/Deko Labs', snippet: 'Gary es el Lead Enterprise Architect y auditor técnico de Deko Labs.' },
+      { cleanTitle: 'STAND IA - Visión General', name: 'STAND IA - Visión General.md', folderPath: '02_Projects', snippet: 'Vendedor digital interactivo con IA multimodal.' },
+    ];
+
+    const mockDepsWithAi = {
+      obsidianService: {
+        searchNotes: async () => mockObsidianNotes,
+      },
+      synthesizeToolResults: async (payload) => {
+        synthesisCalled = true;
+        synthesisPayload = payload;
+        return 'Sebastián querido, revisé tus notas de Deko Labs:\n\n• 📁 <b>Fred - Lead Software Engineer</b> <i>(03_Areas/Deko Labs)</i>\n\n• 📁 <b>Gary - CTO</b> <i>(03_Areas/Deko Labs)</i>\n\n• 📁 <b>STAND IA - Visión General</b> <i>(02_Projects)</i>\n\n¿Deseas que profundice en alguna de ellas?';
+      },
+      ai: {},
+    };
+
+    const searchAction = { action: 'SEARCH_OBSIDIAN_NOTES', query: 'Deko Labs' };
+    const searchResult = await handleObsidianAction(searchAction, mockDepsWithAi, { userText: 'Dame un resumen de notas sobre Deko Labs' });
+
+    assert.equal(synthesisCalled, true, 'SEARCH_OBSIDIAN_NOTES debe invocar synthesizeToolResults cuando hay IA disponible');
+    assert.equal(synthesisPayload.toolName, 'Obsidian Vault');
+    assert.ok(synthesisPayload.dataSummary.includes('Fred - Lead Software Engineer'));
+    assert.ok(synthesisPayload.dataSummary.includes('Gary - CTO'));
+    assert.ok(synthesisPayload.dataSummary.includes('Ley Universal de Aire Visual'));
+    assert.ok(searchResult.reply.includes('Fred - Lead Software Engineer'));
+    assert.ok(searchResult.reply.includes('\n\n• 📁 <b>Gary - CTO</b>'), 'Debe respetar el aire visual con doble salto de línea');
+
+    // 2. Validar que el fallback de SEARCH_OBSIDIAN_NOTES (sin IA) nunca produzca párrafos pegados con comas ni guiones corridos
+    const mockDepsWithoutAi = {
+      obsidianService: {
+        searchNotes: async () => mockObsidianNotes,
+      },
+      ai: null,
+      synthesizeToolResults: null,
+    };
+
+    // 2a. Fallback por búsqueda puntual (!isPanoramic)
+    const fallbackSearchRes = await handleObsidianAction(searchAction, mockDepsWithoutAi, { userText: 'Dame las notas de Deko Labs' });
+    assert.ok(!fallbackSearchRes.reply.includes(', Fred'), 'Prohibido terminantemente unir notas con comas corridas');
+    assert.ok(!fallbackSearchRes.reply.includes(', Gary'), 'Prohibido terminantemente unir notas con comas corridas');
+    assert.ok(fallbackSearchRes.reply.includes('• 📁 <b>Fred - Lead Software Engineer</b> <i>(03_Areas/Deko Labs)</i>'));
+    assert.ok(fallbackSearchRes.reply.includes('• 📁 <b>Gary - CTO</b> <i>(03_Areas/Deko Labs)</i>'));
+    assert.ok(fallbackSearchRes.reply.includes('\n\n• 📁 <b>Gary - CTO</b>'), 'Cada nota debe ir separada por doble salto de línea');
+
+    // 2b. Fallback panorámico (isPanoramic)
+    const fallbackPanoramicAction = { action: 'SEARCH_OBSIDIAN_NOTES', query: '' };
+    const fallbackPanoramicRes = await handleObsidianAction(fallbackPanoramicAction, mockDepsWithoutAi, { userText: 'Reporte de notas' });
+    assert.ok(!fallbackPanoramicRes.reply.includes(', Fred'), 'Fallback panorámico no debe tener listas con comas');
+    assert.ok(fallbackPanoramicRes.reply.includes('📂 <b>Áreas:</b>'), 'Debe organizar por categorías limpias');
+    assert.ok(fallbackPanoramicRes.reply.includes('• <b>Fred - Lead Software Engineer</b>'));
+    assert.ok(fallbackPanoramicRes.reply.includes('• <b>Gary - CTO</b>'));
+    assert.ok(fallbackPanoramicRes.reply.includes('📂 <b>Proyectos:</b>'));
+    assert.ok(fallbackPanoramicRes.reply.includes('• <b>STAND IA - Visión General</b>'));
+
+    // 3. Validar que sanitizeReplyText convierta encabezados ### a <b>, guiones - item a • item, y preserve el aire visual con doble salto (\n\n)
+    const rawMarkdownWithHeadersAndDashes =
+      '### Reporte General de Notas en Obsidian\n' +
+      '- Fred - Lead Software Engineer (03_Areas/Deko Labs)\n' +
+      '- Gary - CTO (03_Areas/Deko Labs)\n' +
+      '- STAND IA - Visión General (02_Projects)\n\n\n\n' +
+      'Notas clave:\n' +
+      '* Revisar arquitectura sin parchecitos\n' +
+      '**Sebastián Jiménez** como Product Owner.';
+
+    const sanitizedResult = sanitizeReplyText(rawMarkdownWithHeadersAndDashes);
+    assert.ok(!sanitizedResult.includes('###'), 'No debe quedar ningún encabezado de Markdown con numerales');
+    assert.ok(sanitizedResult.includes('<b>Reporte General de Notas en Obsidian</b>\n\n'));
+    assert.ok(!sanitizedResult.includes('- Fred'), 'No deben quedar viñetas con guiones al inicio de línea');
+    assert.ok(sanitizedResult.includes('• Fred - Lead Software Engineer'));
+    assert.ok(sanitizedResult.includes('• Gary - CTO'));
+    assert.ok(sanitizedResult.includes('• STAND IA - Visión General'));
+    assert.ok(sanitizedResult.includes('• Revisar arquitectura sin parchecitos'));
+    assert.ok(sanitizedResult.includes('<b>Sebastián Jiménez</b>'));
+    assert.ok(!sanitizedResult.includes('\n\n\n'), 'Saltos excesivos (>= 3) deben colapsarse a doble salto (\n\n)');
+
+    // 4. Validar que DIAGNOSE_SYSTEM use <b> en vez de asteriscos
+    const mockDiagStatus = {
+      process: { uptimeFormatted: '3h 12m', memoryUsage: { heapUsedMb: 52 } },
+      database: { status: 'CONNECTED', latencyMs: 5 },
+      googleWorkspace: { drive: true, gmail: true, calendar: true, tasks: true },
+      recentErrors: ['EAI_AGAIN DNS temporary error'],
+    };
+
+    const diagDeps = {
+      diagnosticsService: {
+        getSystemStatus: async () => mockDiagStatus,
+      },
+    };
+
+    const diagResult = await handleSystemAction({ action: 'DIAGNOSE_SYSTEM', scope: 'full' }, diagDeps);
+    assert.ok(!diagResult.reply.includes('*Uptime:*'), 'Prohibido usar asteriscos para Uptime');
+    assert.ok(!diagResult.reply.includes('*Memoria Heap:*'), 'Prohibido usar asteriscos para Memoria');
+    assert.ok(!diagResult.reply.includes('*PostgreSQL:*'), 'Prohibido usar asteriscos para PostgreSQL');
+    assert.ok(!diagResult.reply.includes('*Google Workspace:*'), 'Prohibido usar asteriscos para Workspace');
+    assert.ok(diagResult.reply.includes('🩺 <b>Diagnóstico de Salud e Introspección del Hub:</b>\n\n'));
+    assert.ok(diagResult.reply.includes('⏱️ <b>Uptime:</b> 3h 12m\n\n'));
+    assert.ok(diagResult.reply.includes('💾 <b>Memoria Heap:</b> 52 MB\n\n'));
+    assert.ok(diagResult.reply.includes('🗄️ <b>PostgreSQL:</b> Conectada (5ms)\n\n'));
+    assert.ok(diagResult.reply.includes('☁️ <b>Google Workspace:</b>'));
+    assert.ok(diagResult.reply.includes('⚠️ <b>Últimos eventos de error registrados (1):</b>\n• <code>EAI_AGAIN DNS temporary error</code>'));
+
+    // 5. Validar que CARMENCITA_SYSTEM_PROMPT y TOOL_SYNTHESIS_PROMPT contengan explícitamente la LEY UNIVERSAL DE AIRE VISUAL Y SEPARACIÓN DE IDEAS
+    assert.ok(
+      CARMENCITA_SYSTEM_PROMPT.includes('LEY UNIVERSAL DE AIRE VISUAL Y SEPARACIÓN DE IDEAS'),
+      'CARMENCITA_SYSTEM_PROMPT debe contener la Ley Universal de Aire Visual'
+    );
+    assert.ok(
+      CARMENCITA_SYSTEM_PROMPT.includes('CERO LISTAS CORRIDAS EN UN SOLO PÁRRAFO'),
+      'CARMENCITA_SYSTEM_PROMPT debe prohibir listas corridas en un solo párrafo'
+    );
+    assert.ok(
+      CARMENCITA_SYSTEM_PROMPT.includes('LISTADOS CON VIÑETAS INDEPENDIENTES Y AIRE'),
+      'CARMENCITA_SYSTEM_PROMPT debe exigir viñetas independientes con aire'
+    );
+    assert.ok(
+      CARMENCITA_SYSTEM_PROMPT.includes('PÁRRAFOS ULTRA CORTOS'),
+      'CARMENCITA_SYSTEM_PROMPT debe exigir párrafos ultra cortos'
+    );
+
+    const testToolSynthesisPrompt = TOOL_SYNTHESIS_PROMPT(
+      'resumen de obsidian',
+      'Obsidian Vault',
+      '[Nota 1] Título: "Fred"\n[Nota 2] Título: "Gary"'
+    );
+    assert.ok(
+      testToolSynthesisPrompt.includes('LEY UNIVERSAL DE AIRE VISUAL Y SEPARACIÓN DE IDEAS'),
+      'TOOL_SYNTHESIS_PROMPT debe contener explícitamente la Ley Universal de Aire Visual'
+    );
+    assert.ok(
+      testToolSynthesisPrompt.includes('CERO TEXTO AMONTONADO'),
+      'TOOL_SYNTHESIS_PROMPT debe exigir cero texto amontonado'
+    );
+    assert.ok(
+      testToolSynthesisPrompt.includes('Deja SIEMPRE un salto de línea (\\n\\n) entre elementos distintos'),
+      'TOOL_SYNTHESIS_PROMPT debe prohibir agrupar elementos en una sola línea corrida'
+    );
   });
 
   // Limpieza final

@@ -171,41 +171,57 @@ export async function handleObsidianAction(parsedAction, deps, context = {}) {
       reply = `Mira Sebastián querido, no pude consultar tus notas de Obsidian en este momento debido a un detalle de conexión con Google Drive: ${searchErr}.`;
     } else if (notes.length === 0) {
       reply = `Sebastián querido, ya revisé directamente en tu Obsidian Vault y no encontré notas${parsedAction.query ? ` con el término "${parsedAction.query}"` : ''}. Si deseas, indícame en qué carpeta buscar o te la creo de inmediato.`;
-    } else if (isPanoramic) {
-      const groups = {};
-      for (const note of notes) {
-        let cat = 'General';
-        const fp = (note.folderPath || note.relativePath || '').toLowerCase();
-        if (fp.includes('project') || fp.includes('proyecto') || fp.includes('02_')) cat = 'Proyectos';
-        else if (fp.includes('inbox') || fp.includes('01_')) cat = 'Inbox';
-        else if (fp.includes('area') || fp.includes('área') || fp.includes('03_')) cat = 'Áreas';
-        else if (fp.includes('meta') || fp.includes('00_')) cat = 'Meta';
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push(note.cleanTitle || note.name.replace(/\.md$/i, ''));
-      }
-
-      const formatList = (arr) => {
-        if (!arr || arr.length === 0) return '';
-        if (arr.length === 1) return arr[0];
-        if (arr.length === 2) return `${arr[0]} y ${arr[1]}`;
-        return `${arr.slice(0, -1).join(', ')} y ${arr[arr.length - 1]}`;
-      };
-
-      const parts = ['Proyectos', 'Inbox', 'Áreas', 'Meta']
-        .filter((cat) => groups[cat]?.length)
-        .map((cat) => `en ${cat} tienes ${formatList(groups[cat].slice(0, 3))}`);
-      if (groups['General']?.length && parts.length === 0) {
-        parts.push(`tienes ${formatList(groups['General'].slice(0, 5))}`);
-      }
-
-      const breakdown = parts.length > 0 ? parts.join('; ') + '.' : `${notes.slice(0, 5).map((n) => n.cleanTitle || n.name.replace(/\.md$/i, '')).join(', ')}.`;
-      reply = `Sebastián querido, ya revisé a fondo tu Obsidian Vault y tienes activas ${notes.length} notas. ${breakdown.charAt(0).toUpperCase() + breakdown.slice(1)} ¿Deseas que profundice en alguna en particular?`;
     } else {
-      const titulos = notes.slice(0, 5).map((f) => {
-        const base = f.cleanTitle || f.name.replace(/\.md$/i, '');
-        return f.folderPath ? `${base} (${f.folderPath})` : base;
-      }).join(', ');
-      reply = `Sebastián querido, ya te encontré ${notes.length} nota(s) en tu Obsidian: ${titulos}. ¿Deseas que te lea alguna de ellas o te prepare un resumen ejecutivo?`;
+      const hasAi = Boolean(deps.ai || deps.brain?.ai || deps.synthesizeToolResults);
+      if (hasAi) {
+        const notesSummary = notes.slice(0, 10).map((n, i) => {
+          const base = n.cleanTitle || n.name.replace(/\.md$/i, '');
+          const folder = n.folderPath ? ` | Carpeta: ${n.folderPath}` : '';
+          const snippet = n.snippet ? ` | Extracto: ${n.snippet.slice(0, 150).replace(/\n/g, ' ')}` : '';
+          return `[Nota ${i + 1}] Título: "${base}"${folder}${snippet}`;
+        }).join('\n\n');
+
+        const userQueryText = context?.userText || (parsedAction.query ? `Notas sobre "${parsedAction.query}"` : 'Reporte general de notas en Obsidian');
+
+        reply = await synthesizeToolResults(deps, {
+          userText: userQueryText,
+          toolName: 'Obsidian Vault',
+          dataSummary: `Sebastián consultó: "${userQueryText}".\nSe encontraron ${notes.length} notas en el Obsidian Vault:\n\n${notesSummary}\n\nInstrucción: Presenta las notas encontradas aplicando la Ley Universal de Aire Visual: cada nota en su propia línea con viñeta • o 📁, título en <b>negrita</b>, carpeta/área bien diferenciada, doble salto de línea (\n\n) entre elementos, y una breve apreciación o resumen si Sebastián lo solicitó. Cero listas pegadas en un solo párrafo.`,
+          context,
+        });
+      }
+
+      const isMockEcho = reply && (reply.includes('SEARCH_OBSIDIAN_NOTES') || reply.includes('Entro a revisar'));
+      if (!reply || isMockEcho) {
+        if (isPanoramic) {
+          const groups = {};
+          for (const note of notes) {
+            let cat = 'General';
+            const fp = (note.folderPath || note.relativePath || '').toLowerCase();
+            if (fp.includes('project') || fp.includes('proyecto') || fp.includes('02_')) cat = 'Proyectos';
+            else if (fp.includes('inbox') || fp.includes('01_')) cat = 'Inbox';
+            else if (fp.includes('area') || fp.includes('área') || fp.includes('03_')) cat = 'Áreas';
+            else if (fp.includes('meta') || fp.includes('00_')) cat = 'Meta';
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(note.cleanTitle || note.name.replace(/\.md$/i, ''));
+          }
+
+          const catSections = Object.entries(groups)
+            .filter(([_, list]) => list.length > 0)
+            .map(([cat, list]) => `📂 <b>${cat}:</b>\n${list.slice(0, 4).map((t) => `• <b>${t}</b>`).join('\n')}`)
+            .join('\n\n');
+
+          reply = `Sebastián querido, ya revisé a fondo tu Obsidian Vault y tienes activas ${notes.length} notas organizadas:\n\n${catSections}\n\n¿Deseas que profundice en alguna en particular? ¿O te preparo un resumen ejecutivo de alguna de ellas?`;
+        } else {
+          const listBullets = notes.slice(0, 6).map((f) => {
+            const base = f.cleanTitle || f.name.replace(/\.md$/i, '');
+            const loc = f.folderPath ? ` <i>(${f.folderPath})</i>` : '';
+            return `• 📁 <b>${base}</b>${loc}`;
+          }).join('\n\n');
+
+          reply = `Sebastián querido, ya te encontré ${notes.length} nota(s) en tu Obsidian relacionadas con tu consulta:\n\n${listBullets}\n\n¿Deseas que te lea alguna de ellas o preparemos una síntesis ejecutiva?`;
+        }
+      }
     }
 
     return makeActionResult({

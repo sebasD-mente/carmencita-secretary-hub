@@ -31,15 +31,15 @@ export async function handleSystemAction(parsedAction, deps, context = {}) {
       const wsStr = ws ? `Drive (${ws.drive ? '✅' : '❌'}), Gmail (${ws.gmail ? '✅' : '❌'}), Calendar (${ws.calendar ? '✅' : '❌'}), Tasks (${ws.tasks ? '✅' : '❌'})` : 'N/A';
       const errLines = diagStatus.recentErrors || [];
       const errDetail = errLines.length > 0
-        ? `\n\n⚠️ *Últimos eventos de error registrados (${errLines.length}):*\n${errLines.map(e => `• \`${e}\``).join('\n')}`
-        : '\n\n✨ *Estado de errores:* Ningún error reciente registrado.';
+        ? `\n\n⚠️ <b>Últimos eventos de error registrados (${errLines.length}):</b>\n${errLines.map(e => `• <code>${e}</code>`).join('\n')}`
+        : '\n\n✨ <b>Estado de errores:</b> Ningún error reciente registrado.';
 
       // Regla Anti-Alucinación Deko Labs: NUNCA concatenar cleanText en DIAGNOSE_SYSTEM
-      reply = `🩺 *Diagnóstico de Salud e Introspección del Hub:*\n\n` +
-        `⏱️ *Uptime:* ${uptime}\n` +
-        `💾 *Memoria Heap:* ${heap}\n` +
-        `🗄️ PostgreSQL: ${db}\n` +
-        `☁️ Google Workspace: ${wsStr}${errDetail}\n\n` +
+      reply = `🩺 <b>Diagnóstico de Salud e Introspección del Hub:</b>\n\n` +
+        `⏱️ <b>Uptime:</b> ${uptime}\n\n` +
+        `💾 <b>Memoria Heap:</b> ${heap}\n\n` +
+        `🗄️ <b>PostgreSQL:</b> ${db}\n\n` +
+        `☁️ <b>Google Workspace:</b> ${wsStr}${errDetail}\n\n` +
         `Todos los sistemas se encuentran bajo supervisión activa, Sebastián querido.`;
     } else {
       reply = `Sebastián querido, todos mis subsistemas operativos principales se encuentran activos y funcionando con normalidad.`;

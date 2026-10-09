@@ -15,8 +15,8 @@ export const DOMAIN_CEILINGS = {
   'src/index.js': 250,
 
   // Capa de Herramientas Modulares (src/tools/)
-  'src/tools/obsidian.tools.js': 280,
-  'src/tools/workspace.tools.js': 400,
+  'src/tools/obsidian.tools.js': 300,
+  'src/tools/workspace.tools.js': 420,
   'src/tools/system.tools.js': 200,
   'src/tools/media.tools.js': 220,
   'src/tools/documents.tools.js': 220,

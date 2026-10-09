@@ -92,11 +92,15 @@ export function sanitizeReplyText(rawText) {
     if (!closed) break;
   }
   cleaned = cleaned.replace(/```(?:json)?\s*```/gi, '');
-  // Convertir markdown bold **texto** a <b>texto</b> para parse_mode HTML de Telegram
+  // 1. Reemplazar encabezados Markdown (# Titulo, ## Titulo, ### Titulo) por <b>Titulo</b>\n\n
+  cleaned = cleaned.replace(/(^|\n)[ \t]*#{1,6}[ \t]+([^\r\n]+)/g, '$1<b>$2</b>\n\n');
+  // 2. Convertir viñetas de guiones al inicio de línea (- item) en viñetas limpias (• item)
+  cleaned = cleaned.replace(/(^|\n)[ \t]*-[ \t]+/g, '$1• ');
+  // 3. Reemplazar asteriscos de negrita **texto** por <b>texto</b>
   cleaned = cleaned.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  // Convertir viñetas de asterisco suelto (* item) a viñetas limpias (• item)
-  cleaned = cleaned.replace(/(^|\n)\s*\*\s+/g, '$1• ');
-  // Colapsar saltos excesivos a máximo 2 saltos (\n\n) para mantener el aire visual
+  // 4. Reemplazar asteriscos de viñeta * item por • item
+  cleaned = cleaned.replace(/(^|\n)[ \t]*\*[ \t]+/g, '$1• ');
+  // 5. Colapsar saltos excesivos a máximo 2 saltos (\n\n) para mantener el aire visual
   return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 }
 
