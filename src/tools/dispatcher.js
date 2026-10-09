@@ -1,4 +1,5 @@
 import { validateToolArgs } from './schemas/index.js';
+import { DriveToolSchema, handleDriveAction } from './drive.tools.js';
 
 /**
  * Despachador Tipado y Segregador de Herramientas para el Motor Agéntico de Carmencita.
@@ -22,7 +23,7 @@ export class ToolDispatcher {
    * @returns {boolean}
    */
   isDestructiveAction(toolName, args = {}) {
-    if (['DELETE_EVENT', 'CANCEL_CALENDAR_EVENT', 'SEND_EMAIL', 'CANCEL_TASK', 'DELETE_NOTE'].includes(toolName)) return true;
+    if (['DELETE_EVENT', 'CANCEL_CALENDAR_EVENT', 'SEND_EMAIL', 'CANCEL_TASK', 'DELETE_NOTE', 'DELETE_DRIVE_FILE'].includes(toolName)) return true;
     if (toolName === 'manage_calendar') {
       const a = String(args.action || '').toUpperCase();
       return a === 'CANCEL' || a === 'DELETE' || a === 'DELETE_EVENT';
@@ -31,6 +32,9 @@ export class ToolDispatcher {
     if (toolName === 'manage_obsidian_notes') {
       const a = String(args.action || '').toUpperCase();
       return a === 'DELETE' || a === 'DELETE_NOTE';
+    }
+    if (toolName === 'manage_drive') {
+      return String(args.action || '').toUpperCase() === 'DELETE';
     }
     return false;
   }
@@ -44,7 +48,14 @@ export class ToolDispatcher {
    */
   async dispatch(toolName, rawArgs = {}, context = {}) {
     // 1. Validación Previa con Esquemas Coercitivos Zod
-    const validation = validateToolArgs(toolName, rawArgs);
+    let validation;
+    if (toolName === 'manage_drive' || toolName === 'DELETE_DRIVE_FILE') {
+      const parsed = DriveToolSchema.safeParse(rawArgs);
+      validation = parsed.success ? { valid: true, data: parsed.data } : { valid: false, error: parsed.error.format() };
+    } else {
+      validation = validateToolArgs(toolName, rawArgs);
+    }
+
     if (!validation.valid) {
       return {
         status: 'error',
@@ -58,10 +69,11 @@ export class ToolDispatcher {
 
     // 2. Segregación READ vs. MUTATE Crítico (Staged Actions)
     if (!context.isConfirmed && !context.bypassStaging && this.isDestructiveAction(toolName, args)) {
-      const summary = args.summary || args.title || args.eventId || args.taskId || `${toolName}:${args.action || 'MUTATE'}`;
+      const summary = args.summary || args.title || args.name || args.fileId || args.eventId || args.taskId || `${toolName}:${args.action || 'MUTATE'}`;
       const actionType = toolName === 'manage_calendar' && (args.action === 'CANCEL' || args.action === 'DELETE') ? 'CANCEL_CALENDAR_EVENT'
         : toolName === 'manage_tasks' && args.action === 'CANCEL' ? 'CANCEL_TASK'
         : toolName === 'manage_obsidian_notes' && args.action === 'DELETE' ? 'DELETE_NOTE'
+        : toolName === 'manage_drive' && args.action === 'DELETE' ? 'DELETE_DRIVE_FILE'
         : toolName;
 
       const description = `Confirmar ${actionType}: "${summary}"`;
@@ -128,6 +140,9 @@ export class ToolDispatcher {
         case 'manage_obsidian_notes':
         case 'DELETE_NOTE':
           return await this._handleObsidian(toolName === 'DELETE_NOTE' ? { ...args, action: 'DELETE' } : args, context);
+        case 'manage_drive':
+        case 'DELETE_DRIVE_FILE':
+          return await this._handleDrive(toolName === 'DELETE_DRIVE_FILE' ? { ...args, action: 'DELETE' } : args, context);
         case 'manage_tasks':
         case 'CANCEL_TASK':
           return await this._handleTasks(toolName === 'CANCEL_TASK' ? { ...args, action: 'CANCEL' } : args, context);
@@ -245,6 +260,11 @@ export class ToolDispatcher {
       return { success: true, data: { result } };
     }
     throw new Error(`Acción de Obsidian no reconocida: ${action}`);
+  }
+
+  async _handleDrive(args) {
+    const service = this.deps.googleDriveService || this.deps.driveService;
+    return await handleDriveAction(service, args);
   }
 
   async _handleTasks(args) {

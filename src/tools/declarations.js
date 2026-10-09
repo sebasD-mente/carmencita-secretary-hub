@@ -76,7 +76,7 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
   },
   {
     name: 'manage_obsidian_notes',
-    description: 'Administra las notas del Obsidian Vault sincronizadas en Google Drive: buscar, leer, crear, actualizar, anexar o sincronizar notas.',
+    description: 'Administra exclusivamente las notas estructuradas del Obsidian Vault (DekoLabs-Vault): buscar, leer, crear, actualizar, anexar o sincronizar notas en formato Markdown con frontmatter y memoria RAG.',
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -100,6 +100,49 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
         query: {
           type: Type.STRING,
           description: 'Término de búsqueda semántica o por palabras clave.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'manage_drive',
+    description: 'Gestiona archivos y carpetas soberanas en Google Drive API v3 (carpetas oficiales: comunicacion, reportes, custom_agents): listar, leer, crear, actualizar in-place, mover o eliminar.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          description: 'Acción soberana en Google Drive: LIST, READ, CREATE, UPDATE, MOVE, DELETE o SEARCH.',
+          enum: ['LIST', 'READ', 'CREATE', 'UPDATE', 'MOVE', 'DELETE', 'SEARCH'],
+        },
+        name: {
+          type: Type.STRING,
+          description: 'Nombre del archivo con extensión (ej: PERFIL_Y_BLUEPRINT_CARMENCITA_CHIEF_OF_STAFF.md o COM_20261009_...).',
+        },
+        content: {
+          type: Type.STRING,
+          description: 'Contenido completo en texto o Markdown para crear o actualizar el archivo.',
+        },
+        folder: {
+          type: Type.STRING,
+          description: 'Alias de carpeta oficial (comunicacion, reportes, custom_agents) o ID directo de Google Drive.',
+        },
+        targetFolder: {
+          type: Type.STRING,
+          description: 'Carpeta destino para la acción MOVE (alias o ID directo).',
+        },
+        fileId: {
+          type: Type.STRING,
+          description: 'Identificador único de Google Drive para lectura directa, actualización o movimiento.',
+        },
+        query: {
+          type: Type.STRING,
+          description: 'Término de búsqueda o filtro de nombre.',
+        },
+        maxResults: {
+          type: Type.INTEGER,
+          description: 'Límite de archivos a recuperar (por defecto 20).',
         },
       },
       required: ['action'],

@@ -215,7 +215,7 @@ export class CarmencitaBrain {
     };
   }
 
-  async processTextMessage({ channel, senderId, senderName, text, onProgress = null }) {
+  async processTextMessage({ channel, senderId, senderName, text, isVoiceInput = false, onProgress = null }) {
     await this._logMessage({ channel, senderId, senderName, role: 'user', content: text });
     if (!this.ai) {
       const fallbackReply = this._handleLocalFallback(text);
@@ -232,14 +232,14 @@ export class CarmencitaBrain {
         systemInstruction: this.getSystemPrompt(),
         history: [],
         userMessage: contextPrompt,
-        context: { userText: text, channel, senderId, senderName, onProgress },
+        context: { userText: text, channel, senderId, senderName, onProgress, isVoiceInput },
       });
 
       let actionResult = (runnerResult.toolCallsSummary && runnerResult.toolCallsSummary.length > 0)
         ? mapToolSummaryToActionResult(runnerResult)
         : await this._executeExtractedActions(runnerResult.rawReply || runnerResult.reply, onProgress, { userText: text, channel, senderId, senderName });
 
-      if (!actionResult.hasVoice && this.voiceService && /audio|voz|resumen en audio|nota de voz/i.test(text)) {
+      if (!actionResult.hasVoice && this.voiceService && (isVoiceInput || /audio|voz|resumen en audio|nota de voz/i.test(text))) {
         try {
           const voiceFile = await this.voiceService.synthesizeSpeech(actionResult.reply);
           if (voiceFile) { actionResult.hasVoice = true; actionResult.voiceFile = voiceFile; }

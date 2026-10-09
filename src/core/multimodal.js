@@ -90,33 +90,35 @@ export async function handleBrainDocument(brain, { channel, senderId, senderName
 }
 
 export async function handleBrainAudio(brain, { channel, senderId, senderName, buffer, mimeType, text = '', onProgress = null }) {
-  if (!brain.ai) return `🎙️ Recibí tu nota de voz, Sebastián. En context conectemos la API de Gemini podré transcribirla y ejecutar las órdenes de inmediato.`;
+  if (!brain.ai) return `🎙️ Recibí tu nota de voz, Sebastián. En cuanto conectemos la API de Gemini podré transcribirla y ejecutar las órdenes de inmediato.`;
   try {
-    const { ahoraGuatemala, ahoraIso } = brain._getGuatemalaTimestamps();
-    const { recentMessages, pendingTasks } = await brain._getRecentContext(channel, senderId);
-    const ragQuery = text?.trim() || (recentMessages.length ? recentMessages.slice(-2).map((m) => m.content).join(' ') : 'directivas y preferencias');
-    const { directivesBlock, memoriesBlock } = await brain._resolveRAGContext(ragQuery);
-    const historyBlock = recentMessages.length ? `\n📜 HISTORIAL DE CONVERSACIÓN RECIENTE (MEMORIA DE CONTEXTO):\n${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}\n` : '';
-    const prompt = `\nCONTEXTO TEMPORAL DEL SISTEMA:\n• Fecha y hora actual en Guatemala: ${ahoraGuatemala} (America/Guatemala / UTC-6)\n• Timestamp ISO 8601: ${ahoraIso}\n• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})\n• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${historyBlock}${directivesBlock}${memoriesBlock}\n\nEscucha atentamente este audio de Sebastián. Ten muy presente el HISTORIAL DE CONVERSACIÓN RECIENTE y las directivas recuperadas. Responde con un mensaje hablado, cálido, zalamero y natural de 2 a 3 oraciones. Si requiere acciones técnicas, agrega el bloque JSON al final.`;
+    let transcribedText = text?.trim() || '';
 
-    const response = await brain._generateContentWithFailover({
-      contents: [prompt, { inlineData: { mimeType: mimeType || 'audio/ogg', data: buffer.toString('base64') } }],
-      config: { systemInstruction: brain.getSystemPrompt() },
+    if (buffer && buffer.length > 0) {
+      const transcriptionRes = await brain._generateContentWithFailover({
+        contents: [
+          'Transcribe fielmente en español el audio de Sebastián Jiménez sin agregar preámbulos ni comentarios.',
+          { inlineData: { mimeType: mimeType || 'audio/ogg', data: buffer.toString('base64') } },
+        ],
+      });
+      const extracted = (transcriptionRes?.text || '').trim();
+      if (extracted) {
+        transcribedText = extracted;
+      }
+    }
+
+    if (!transcribedText) {
+      transcribedText = 'Nota de voz recibida de Sebastián.';
+    }
+
+    return await brain.processTextMessage({
+      channel,
+      senderId,
+      senderName,
+      text: transcribedText,
+      isVoiceInput: true,
+      onProgress,
     });
-    const replyText = response.text || 'He escuchado tu nota de voz, Sebastián.';
-    const actionResult = await brain._executeExtractedActions(replyText, onProgress, { userText: text || 'nota de voz recibida', isAudio: true, channel, senderId, senderName });
-    if (!actionResult.hasVoice && brain.voiceService) {
-      try {
-        const voiceFile = await brain.voiceService.synthesizeSpeech(actionResult.reply);
-        if (voiceFile) { actionResult.hasVoice = true; actionResult.voiceFile = voiceFile; }
-      } catch {}
-    }
-    const historyContent = actionResult.fullHistoryText || actionResult.reply || replyText;
-    await brain._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: historyContent });
-    if (brain.embeddingService && !actionResult.hasMemory) {
-      brain._lastMemoryTask = brain._extractAndSaveMemoryBackground({ userText: text?.trim() || actionResult.reply, historyContent }).catch(() => {});
-    }
-    return actionResult;
   } catch (err) {
     return `Escuché la nota de voz pero ocurrió un error al analizarla: ${err.message}`;
   }
