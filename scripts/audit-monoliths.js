@@ -11,11 +11,14 @@ const rootDir = path.resolve(__dirname, '..');
  */
 export const DOMAIN_CEILINGS = {
   // Capa Core y Orquestación
-  'src/core/brain.js': 350,
+  'src/core/brain.js': 280,
+  'src/core/agent-runner.js': 350,
   'src/index.js': 250,
   'src/config.js': 100,
 
   // Capa de Herramientas Modulares (src/tools/)
+  'src/tools/declarations.js': 280,
+  'src/tools/dispatcher.js': 320,
   'src/tools/obsidian.tools.js': 300,
   'src/tools/workspace.tools.js': 420,
   'src/tools/system.tools.js': 200,
