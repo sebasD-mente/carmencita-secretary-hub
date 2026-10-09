@@ -46,6 +46,10 @@ export const DOMAIN_CEILINGS = {
   'src/validators/actions.schema.js': 380,
   'src/validators/env.schema.js': 150,
   'src/routes/webhooks.js': 250,
+
+  // Capa de Adaptadores e Integración
+  'src/adapters/session-queue.js': 200,
+  'src/adapters/telegram.js': 550,
 };
 
 export const LAYER_DEFAULT_CEILINGS = {

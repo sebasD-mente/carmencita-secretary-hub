@@ -1,22 +1,34 @@
 import { Bot, InputFile } from 'grammy';
 import { config } from '../config.js';
 import { PresentationFormatter } from '../presentation/formatter.js';
+import { UserSessionQueue } from './session-queue.js';
 
 export class TelegramAdapter {
-  constructor(brainService, storageService = null) {
-    this.brain = brainService;
-    this.storage = storageService;
+  constructor(brainService, storageService = null, deps = {}) {
+    if (brainService && typeof brainService === 'object' && brainService.brain && !brainService.processTextMessage) {
+      this.brain = brainService.brain;
+      this.storage = brainService.storage || null;
+      this.deps = brainService;
+    } else {
+      this.brain = brainService;
+      this.storage = storageService;
+      this.deps = (deps && typeof deps === 'object') ? deps : {};
+    }
+    this.sessionQueue = this.deps.sessionQueue || (this.storage?.sessionQueue) || new UserSessionQueue();
     this.bot = null;
     this.isRunning = false;
   }
 
-  init() {
-    if (!config.telegram.token) {
-      console.warn('[Telegram] No TELEGRAM_BOT_TOKEN provided. Telegram adapter disabled.');
-      return false;
+  init(customBot = null) {
+    if (customBot) {
+      this.bot = customBot;
+    } else {
+      if (!config.telegram.token) {
+        console.warn('[Telegram] No TELEGRAM_BOT_TOKEN provided. Telegram adapter disabled.');
+        return false;
+      }
+      this.bot = new Bot(config.telegram.token);
     }
-
-    this.bot = new Bot(config.telegram.token);
 
     // Middleware de Seguridad Estricta (Whitelist de Sebastián - Deny-by-Default)
     this.bot.use(async (ctx, next) => {
@@ -254,32 +266,53 @@ export class TelegramAdapter {
   _registerMessageHandlers() {
     // 1. MENSAJES DE TEXTO
     this.bot.on('message:text', async (ctx) => {
-      const senderId = ctx.from.id;
-      const senderName = ctx.from.first_name || 'Sebastián';
-      const text = ctx.message.text;
+      const senderId = String(ctx.from?.id || 'default');
+      return this.sessionQueue.enqueue(senderId, async () => {
+        const senderName = ctx.from?.first_name || 'Sebastián';
+        const text = ctx.message.text;
 
-      console.log(`📩 [Telegram Texto] De ${senderName} (${senderId}): "${text}"`);
-      await ctx.replyWithChatAction('typing');
+        console.log(`📩 [Telegram Texto] De ${senderName} (${senderId}): "${text}"`);
+        await ctx.replyWithChatAction('typing').catch(() => {});
 
-      const typingInterval = setInterval(() => {
-        ctx.replyWithChatAction('typing').catch(() => {});
-      }, 4000);
+        const typingInterval = setInterval(() => {
+          ctx.replyWithChatAction('typing').catch(() => {});
+        }, 4000);
 
-      try {
-        const reply = await this.brain.processTextMessage({
-          channel: 'telegram',
-          senderId,
-          senderName,
-          text,
-          onProgress: async (ackText) => {
-            await this._safeReply(ctx, ackText);
-            await ctx.replyWithChatAction('typing').catch(() => {});
-          },
-        });
+        try {
+          const reply = await this.brain.processTextMessage({
+            channel: 'telegram',
+            senderId,
+            senderName,
+            text,
+            onProgress: async (ackText) => {
+              await this._safeReply(ctx, ackText);
+              await ctx.replyWithChatAction('typing').catch(() => {});
+            },
+          });
 
-        if (reply?.hasVoice && reply?.voiceFile) {
-          await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
-          if (reply?.hasPhoto && reply?.photoFile) {
+          if (reply?.hasVoice && reply?.voiceFile) {
+            await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+            if (reply?.hasPhoto && reply?.photoFile) {
+              const photoInput = reply.photoFile.buffer
+                ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
+                : new InputFile(reply.photoFile.path);
+              await ctx.replyWithPhoto(photoInput, {
+                caption: reply.photoFile.caption || reply.reply,
+              });
+            } else if (reply?.hasDocument && reply?.documentFile) {
+              const docInput = reply.documentFile.buffer
+                ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
+                : new InputFile(reply.documentFile.path);
+              await ctx.replyWithDocument(docInput, {
+                caption: reply.documentFile.caption || reply.reply,
+              });
+            } else if (reply?.hasExcel && reply?.excelFile) {
+              await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
+                caption: reply.reply,
+              });
+            }
+            // Cero texto duplicado cuando hasVoice es verdadero
+          } else if (reply?.hasPhoto && reply?.photoFile) {
             const photoInput = reply.photoFile.buffer
               ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
               : new InputFile(reply.photoFile.path);
@@ -297,142 +330,162 @@ export class TelegramAdapter {
             await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
               caption: reply.reply,
             });
+          } else {
+            await this._safeReply(ctx, reply?.reply || reply);
           }
-          // Cero texto duplicado cuando hasVoice es verdadero
-        } else if (reply?.hasPhoto && reply?.photoFile) {
-          const photoInput = reply.photoFile.buffer
-            ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
-            : new InputFile(reply.photoFile.path);
-          await ctx.replyWithPhoto(photoInput, {
-            caption: reply.photoFile.caption || reply.reply,
-          });
-        } else if (reply?.hasDocument && reply?.documentFile) {
-          const docInput = reply.documentFile.buffer
-            ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
-            : new InputFile(reply.documentFile.path);
-          await ctx.replyWithDocument(docInput, {
-            caption: reply.documentFile.caption || reply.reply,
-          });
-        } else if (reply?.hasExcel && reply?.excelFile) {
-          await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
-            caption: reply.reply,
-          });
-        } else {
-          await this._safeReply(ctx, reply?.reply || reply);
+        } finally {
+          clearInterval(typingInterval);
         }
-      } finally {
-        clearInterval(typingInterval);
-      }
+      });
     });
 
     // 2. FOTOS Y MULTIMODALIDAD (FACTURAS, CAPTURAS, DIAGRAMAS, GENERAL)
     this.bot.on('message:photo', async (ctx) => {
-      const senderId = ctx.from.id;
-      const senderName = ctx.from.first_name || 'Sebastián';
-      console.log(`📸 [Telegram Foto] Recibida de ${senderName} (${senderId})`);
-      await ctx.replyWithChatAction('upload_photo');
-      const caption = ctx.message.caption || '';
+      const senderId = String(ctx.from?.id || 'default');
+      return this.sessionQueue.enqueue(senderId, async () => {
+        const senderName = ctx.from?.first_name || 'Sebastián';
+        console.log(`📸 [Telegram Foto] Recibida de ${senderName} (${senderId})`);
+        await ctx.replyWithChatAction('upload_photo').catch(() => {});
 
-      const photos = ctx.message.photo;
-      const bestPhoto = photos[photos.length - 1];
-      const file = await ctx.api.getFile(bestPhoto.file_id);
-      const fileUrl = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
+        const actionInterval = setInterval(() => {
+          ctx.replyWithChatAction('upload_photo').catch(() => {});
+        }, 4000);
 
-      const res = await fetch(fileUrl);
-      const buffer = Buffer.from(await res.arrayBuffer());
+        try {
+          const caption = ctx.message.caption || '';
+          const photos = ctx.message.photo;
+          const bestPhoto = photos[photos.length - 1];
+          const file = await ctx.api.getFile(bestPhoto.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
 
-      const reply = await this.brain.processImage({
-        channel: 'telegram',
-        senderId,
-        senderName,
-        buffer,
-        mimeType: 'image/jpeg',
-        caption,
-      });
+          const res = await fetch(fileUrl);
+          const buffer = Buffer.from(await res.arrayBuffer());
 
-      if (reply?.hasVoice && reply?.voiceFile) {
-        await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
-        if (reply?.reply) {
-          await this._safeReply(ctx, reply.reply);
+          const reply = await this.brain.processImage({
+            channel: 'telegram',
+            senderId,
+            senderName,
+            buffer,
+            mimeType: 'image/jpeg',
+            caption,
+          });
+
+          if (reply?.hasVoice && reply?.voiceFile) {
+            await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+            if (reply?.reply) {
+              await this._safeReply(ctx, reply.reply);
+            }
+          } else {
+            await this._safeReply(ctx, reply?.reply || reply);
+          }
+        } finally {
+          clearInterval(actionInterval);
         }
-      } else {
-        await this._safeReply(ctx, reply?.reply || reply);
-      }
+      });
     });
 
     // 3. DOCUMENTOS UNIVERSALES (PDF, EXCEL, CONTRATOS, COTIZACIONES)
     this.bot.on('message:document', async (ctx) => {
-      const senderId = ctx.from.id;
-      const senderName = ctx.from.first_name || 'Sebastián';
-      const doc = ctx.message.document;
-      const originalName = doc.file_name || 'documento.bin';
-      const mimeType = doc.mime_type || 'application/octet-stream';
-      const caption = ctx.message.caption || '';
+      const senderId = String(ctx.from?.id || 'default');
+      return this.sessionQueue.enqueue(senderId, async () => {
+        const senderName = ctx.from?.first_name || 'Sebastián';
+        const doc = ctx.message.document;
+        const originalName = doc.file_name || 'documento.bin';
+        const mimeType = doc.mime_type || 'application/octet-stream';
+        const caption = ctx.message.caption || '';
 
-      console.log(`📑 [Telegram Documento] De ${senderName}: ${originalName} (${mimeType})`);
-      await ctx.replyWithChatAction('upload_document');
+        console.log(`📑 [Telegram Documento] De ${senderName}: ${originalName} (${mimeType})`);
+        await ctx.replyWithChatAction('upload_document').catch(() => {});
 
-      try {
-        const file = await ctx.api.getFile(doc.file_id);
-        const fileUrl = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
+        const actionInterval = setInterval(() => {
+          ctx.replyWithChatAction('upload_document').catch(() => {});
+        }, 4000);
 
-        const res = await fetch(fileUrl);
-        const buffer = Buffer.from(await res.arrayBuffer());
+        try {
+          const file = await ctx.api.getFile(doc.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
 
-        const reply = await this.brain.processDocument({
-          channel: 'telegram',
-          senderId,
-          senderName,
-          buffer,
-          mimeType,
-          originalName,
-          caption,
-        });
+          const res = await fetch(fileUrl);
+          const buffer = Buffer.from(await res.arrayBuffer());
 
-        await this._safeReply(ctx, reply);
-      } catch (err) {
-        console.error('[Telegram Document Error]', err);
-        await ctx.reply(`❌ Ocurrió un error al procesar el documento: ${err.message}`);
-      }
+          const reply = await this.brain.processDocument({
+            channel: 'telegram',
+            senderId,
+            senderName,
+            buffer,
+            mimeType,
+            originalName,
+            caption,
+          });
+
+          await this._safeReply(ctx, reply);
+        } catch (err) {
+          console.error('[Telegram Document Error]', err);
+          await ctx.reply(`❌ Ocurrió un error al procesar el documento: ${err.message}`);
+        } finally {
+          clearInterval(actionInterval);
+        }
+      });
     });
 
     // 4. NOTAS DE VOZ (AUDIO)
     this.bot.on(['message:voice', 'message:audio'], async (ctx) => {
-      const senderId = ctx.from.id;
-      const senderName = ctx.from.first_name || 'Sebastián';
-      console.log(`🎙️ [Telegram Audio] Recibido de ${senderName} (${senderId})`);
-      await ctx.replyWithChatAction('record_voice');
+      const senderId = String(ctx.from?.id || 'default');
+      return this.sessionQueue.enqueue(senderId, async () => {
+        const senderName = ctx.from?.first_name || 'Sebastián';
+        console.log(`🎙️ [Telegram Audio] Recibido de ${senderName} (${senderId})`);
+        await ctx.replyWithChatAction('record_voice').catch(() => {});
 
-      const typingInterval = setInterval(() => {
-        ctx.replyWithChatAction('typing').catch(() => {});
-      }, 4000);
+        const typingInterval = setInterval(() => {
+          ctx.replyWithChatAction('typing').catch(() => {});
+        }, 4000);
 
-      try {
-        const audioObj = ctx.message.voice || ctx.message.audio;
-        const file = await ctx.api.getFile(audioObj.file_id);
-        const fileUrl = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
+        try {
+          const audioObj = ctx.message.voice || ctx.message.audio;
+          const file = await ctx.api.getFile(audioObj.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
 
-        const res = await fetch(fileUrl);
-        const buffer = Buffer.from(await res.arrayBuffer());
+          const res = await fetch(fileUrl);
+          const buffer = Buffer.from(await res.arrayBuffer());
 
-        const reply = await this.brain.processAudio({
-          channel: 'telegram',
-          senderId,
-          senderName,
-          buffer,
-          mimeType: ctx.message.voice ? 'audio/ogg' : (audioObj.mime_type || 'audio/mp3'),
-          onProgress: async (ackText) => {
-            await this._safeReply(ctx, ackText);
-            await ctx.replyWithChatAction('typing').catch(() => {});
-          },
-        });
+          const reply = await this.brain.processAudio({
+            channel: 'telegram',
+            senderId,
+            senderName,
+            buffer,
+            mimeType: ctx.message.voice ? 'audio/ogg' : (audioObj.mime_type || 'audio/mp3'),
+            onProgress: async (ackText) => {
+              await this._safeReply(ctx, ackText);
+              await ctx.replyWithChatAction('typing').catch(() => {});
+            },
+          });
 
-        // Si generó nota de voz (Modo Espejo o acción SEND_VOICE), despachar exclusivamente el audio
-        if (reply?.hasVoice && reply?.voiceFile) {
-          await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
+          // Si generó nota de voz (Modo Espejo o acción SEND_VOICE), despachar exclusivamente el audio
+          if (reply?.hasVoice && reply?.voiceFile) {
+            await ctx.replyWithVoice(new InputFile(reply.voiceFile.buffer, reply.voiceFile.fileName || 'carmencita_voice.ogg'));
 
-          // Si además hay adjunto gráfico o documental solicitado por audio
-          if (reply?.hasPhoto && reply?.photoFile) {
+            // Si además hay adjunto gráfico o documental solicitado por audio
+            if (reply?.hasPhoto && reply?.photoFile) {
+              const photoInput = reply.photoFile.buffer
+                ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
+                : new InputFile(reply.photoFile.path);
+              await ctx.replyWithPhoto(photoInput, {
+                caption: reply.photoFile.caption || reply.reply,
+              });
+            } else if (reply?.hasExcel && reply?.excelFile) {
+              await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
+                caption: reply.reply,
+              });
+            } else if (reply?.hasDocument && reply?.documentFile) {
+              const docInput = reply.documentFile.buffer
+                ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
+                : new InputFile(reply.documentFile.path);
+              await ctx.replyWithDocument(docInput, {
+                caption: reply.documentFile.caption || reply.reply,
+              });
+            }
+            // CERO texto duplicado abajo cuando hasVoice es verdadero
+          } else if (reply?.hasPhoto && reply?.photoFile) {
             const photoInput = reply.photoFile.buffer
               ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
               : new InputFile(reply.photoFile.path);
@@ -450,33 +503,14 @@ export class TelegramAdapter {
             await ctx.replyWithDocument(docInput, {
               caption: reply.documentFile.caption || reply.reply,
             });
+          } else if (reply?.reply) {
+            // Fallback a texto si no hubo nota de voz
+            await this._safeReply(ctx, reply.reply);
           }
-          // CERO texto duplicado abajo cuando hasVoice es verdadero
-        } else if (reply?.hasPhoto && reply?.photoFile) {
-          const photoInput = reply.photoFile.buffer
-            ? new InputFile(reply.photoFile.buffer, reply.photoFile.fileName || 'imagen.png')
-            : new InputFile(reply.photoFile.path);
-          await ctx.replyWithPhoto(photoInput, {
-            caption: reply.photoFile.caption || reply.reply,
-          });
-        } else if (reply?.hasExcel && reply?.excelFile) {
-          await ctx.replyWithDocument(new InputFile(reply.excelFile.buffer, reply.excelFile.fileName), {
-            caption: reply.reply,
-          });
-        } else if (reply?.hasDocument && reply?.documentFile) {
-          const docInput = reply.documentFile.buffer
-            ? new InputFile(reply.documentFile.buffer, reply.documentFile.fileName || 'archivo.bin')
-            : new InputFile(reply.documentFile.path);
-          await ctx.replyWithDocument(docInput, {
-            caption: reply.documentFile.caption || reply.reply,
-          });
-        } else if (reply?.reply) {
-          // Fallback a texto si no hubo nota de voz
-          await this._safeReply(ctx, reply.reply);
+        } finally {
+          clearInterval(typingInterval);
         }
-      } finally {
-        clearInterval(typingInterval);
-      }
+      });
     });
   }
 
