@@ -153,19 +153,25 @@ export class AgentRunner {
 
         if (functionCalls.length > 0) {
           // 1. Agregar turno del modelo con llamadas de herramientas a contents
-          const modelParts = [];
-          if (response.text) {
-            modelParts.push({ text: response.text });
+          // En @google/genai con modelos thinking (gemini-3.8-flash), response.candidates[0].content
+          // contiene el thoughtSignature mandatorio. Preservar el objeto original intacto.
+          if (response?.candidates?.[0]?.content) {
+            contents.push(response.candidates[0].content);
+          } else {
+            const modelParts = [];
+            if (response.text) {
+              modelParts.push({ text: response.text });
+            }
+            for (const call of functionCalls) {
+              modelParts.push({
+                functionCall: {
+                  name: call.name,
+                  args: call.args,
+                },
+              });
+            }
+            contents.push({ role: 'model', parts: modelParts });
           }
-          for (const call of functionCalls) {
-            modelParts.push({
-              functionCall: {
-                name: call.name,
-                args: call.args,
-              },
-            });
-          }
-          contents.push({ role: 'model', parts: modelParts });
 
           // 2. Ejecutar cada herramienta mediante ToolDispatcher (con hard-timeout individual de 8s)
           const responseParts = [];

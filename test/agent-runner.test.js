@@ -322,4 +322,75 @@ test('Suite Hermética de Motor Agéntico ReAct y Native Tool Calling', async (t
     assert.equal(result.stagedActions.length, 1, 'Debe haber 1 acción staged en el runner');
     assert.ok(result.reply.includes('¿Me confirmas para proceder a eliminarlo'), 'Debe solicitar confirmación explícita');
   });
+
+  await t.test('Caso 6 (Preservación de thoughtSignature en bucle ReAct): candidates[0].content se preserva intacto en contents', async () => {
+    let turn2Contents = null;
+
+    const mockCandidateContent = {
+      role: 'model',
+      parts: [
+        {
+          functionCall: {
+            name: 'manage_tasks',
+            args: { action: 'LIST' },
+          },
+          thoughtSignature: 'crypto-thought-sig-12345-verified',
+        },
+      ],
+    };
+
+    const mockTasksService = {
+      listTasks: async () => [{ id: 'task_1', title: 'Comprar boletos' }],
+    };
+
+    const mockClient = new MockGenAIClient([
+      // Turno 1: Gemini responde con candidates[0].content conteniendo thoughtSignature
+      {
+        candidates: [
+          {
+            content: mockCandidateContent,
+          },
+        ],
+        functionCalls: [
+          {
+            name: 'manage_tasks',
+            args: { action: 'LIST' },
+          },
+        ],
+      },
+      // Turno 2: Verificamos que el historial enviado incluye exactamente mockCandidateContent
+      (params) => {
+        turn2Contents = params.contents;
+        return {
+          text: 'Aquí tienes tus tareas pendientes, Sebastián.',
+        };
+      },
+    ]);
+
+    const dispatcher = new ToolDispatcher({
+      taskService: mockTasksService,
+    });
+
+    const runner = new AgentRunner({
+      aiPool: mockClient,
+      toolDispatcher: dispatcher,
+      maxTurns: 5,
+    });
+
+    const result = await runner.run({
+      systemInstruction: 'Eres Carmencita.',
+      userMessage: 'Muestra mis tareas.',
+    });
+
+    assert.ok(turn2Contents, 'Debió ejecutarse el Turno 2 con contents');
+    const modelTurn = turn2Contents.find((c) => c.role === 'model');
+    assert.ok(modelTurn, 'Debe existir el turno role: model');
+    assert.equal(
+      modelTurn.parts[0]?.thoughtSignature,
+      'crypto-thought-sig-12345-verified',
+      'Debe preservar el thoughtSignature criptográfico intacto sin descartarlo'
+    );
+    assert.equal(modelTurn, mockCandidateContent, 'Debe ser la referencia idéntica de candidates[0].content');
+    assert.ok(result.reply.includes('Aquí tienes tus tareas pendientes'));
+  });
 });
