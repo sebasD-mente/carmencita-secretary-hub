@@ -4,134 +4,81 @@ import { z } from 'zod';
  * ==============================================================================
  * CARMENCITA SECRETARY HUB — DEVSECOPS ENVIRONMENT VALIDATOR
  * Estándar Deko Labs: Fail-Fast en Arranque & Zero-Trust
+ * Ticket: [DEKO-CARMEN-M0]
  * ==============================================================================
  */
 
 export const EnvSchema = z
   .object({
-    NODE_ENV: z
-      .enum(['development', 'production', 'test'])
-      .default('development'),
-
-    PORT: z
-      .coerce
-      .number()
-      .int()
-      .min(1024, 'PORT debe ser mayor a 1023')
-      .max(65535, 'PORT debe ser menor a 65536')
-      .default(3050),
-
-    HOST: z
-      .string()
-      .min(1, 'HOST no puede estar vacío')
-      .default('127.0.0.1'),
-
-    DATABASE_URL: z
-      .string()
-      .min(1, 'DATABASE_URL es obligatoria para la persistencia relacional'),
-
-    TELEGRAM_BOT_TOKEN: z
-      .string()
-      .min(1, 'TELEGRAM_BOT_TOKEN es obligatorio para el adaptador de Telegram'),
-
-    GEMINI_API_KEY: z
-      .string()
-      .optional(),
-
-    GEMINI_API_KEYS: z
-      .string()
-      .optional(),
-
-    TELEGRAM_ALLOWED_USERS: z
-      .string()
-      .optional(),
-
-    STORAGE_DIR: z
-      .string()
-      .optional(),
-
-    GCS_BUCKET_NAME: z
-      .string()
-      .optional()
-      .default('carmencita-vault-deko'),
+    PORT: z.coerce.number().default(3050),
+    HOST: z.string().default('127.0.0.1'),
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    DATABASE_URL: z.string().url('DATABASE_URL debe ser una URL válida').min(1, 'DATABASE_URL es obligatoria'),
+    TELEGRAM_BOT_TOKEN: z.string().min(1, 'TELEGRAM_BOT_TOKEN es obligatorio'),
+    GEMINI_API_KEY: z.string().optional(),
+    GEMINI_API_KEYS: z.string().optional(),
+    CARMENCITA_API_KEY: z.string().optional(),
   })
-  .superRefine((data, ctx) => {
-    // Si estamos en entorno de pruebas, no forzar llaves de IA para permitir mocks limpios
-    if (data.NODE_ENV === 'test') {
-      return;
+  .passthrough()
+  .refine(
+    (data) => {
+      const hasSingleKey = Boolean(data.GEMINI_API_KEY && data.GEMINI_API_KEY.trim().length > 0);
+      const hasPoolKeys = Boolean(data.GEMINI_API_KEYS && data.GEMINI_API_KEYS.trim().length > 0);
+      return hasSingleKey || hasPoolKeys;
+    },
+    {
+      message: 'Al menos una de GEMINI_API_KEY o GEMINI_API_KEYS debe estar presente y no vacía.',
+      path: ['GEMINI_API_KEY'],
     }
-
-    const hasSingleKey = Boolean(data.GEMINI_API_KEY && data.GEMINI_API_KEY.trim().length > 0);
-    const hasKeyPool = Boolean(data.GEMINI_API_KEYS && data.GEMINI_API_KEYS.trim().length > 0);
-
-    if (!hasSingleKey && !hasKeyPool) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Se requiere al menos GEMINI_API_KEY o GEMINI_API_KEYS en el entorno para inferencia agéntica.',
-        path: ['GEMINI_API_KEY'],
-      });
-    }
-  });
-
-/**
- * Ejecuta validación exhaustiva de variables de entorno al arranque.
- * Si exitOnError es true y la validación falla, aborta inmediatamente con process.exit(1).
- *
- * @param {Record<string, string|undefined>} [env=process.env]
- * @param {Object} [options={}]
- * @param {boolean} [options.exitOnError=false]
- * @returns {{ success: boolean, data?: z.infer<typeof EnvSchema>, errors?: any }}
- */
-export function validateEnv(env = process.env, { exitOnError = false } = {}) {
-  const result = EnvSchema.safeParse(env);
-  let issueList = [];
-
-  if (!result.success) {
-    issueList = result.error.issues.map((issue) => ({
-      variable: issue.path.join('.'),
-      message: issue.message,
-    }));
-  }
-
-  // Verificación explícita de llaves de IA independiente de otros campos
-  const isTest = env.NODE_ENV === 'test';
-  const hasGeminiKey = Boolean(
-    (env.GEMINI_API_KEY && String(env.GEMINI_API_KEY).trim()) ||
-    (env.GEMINI_API_KEYS && String(env.GEMINI_API_KEYS).trim())
   );
 
-  if (!isTest && !hasGeminiKey) {
-    if (!issueList.some((i) => i.variable === 'GEMINI_API_KEY')) {
-      issueList.push({
-        variable: 'GEMINI_API_KEY',
-        message: 'Se requiere al menos GEMINI_API_KEY o GEMINI_API_KEYS en el entorno para inferencia agéntica.',
-      });
-    }
+/**
+ * Valida las variables de entorno de arranque.
+ * Si fallan las variables obligatorias:
+ * - Imprime el log forense de error de DeKo Labs.
+ * - Si env.NODE_ENV !== 'test', ejecuta process.exit(1).
+ * - En entorno de test, lanza un Error descriptivo.
+ *
+ * @param {Record<string, any>} [env=process.env]
+ * @param {Object} [options={}]
+ * @param {boolean|null} [options.exitOnError=null]
+ * @returns {z.infer<typeof EnvSchema>}
+ */
+export function validateEnv(env = process.env, { exitOnError = null } = {}) {
+  const result = EnvSchema.safeParse(env);
+  const issues = result.success ? [] : [...result.error.issues];
+
+  const hasKey = Boolean(
+    (env?.GEMINI_API_KEY && String(env.GEMINI_API_KEY).trim()) ||
+    (env?.GEMINI_API_KEYS && String(env.GEMINI_API_KEYS).trim())
+  );
+  if (!hasKey && !issues.some((i) => i.path.includes('GEMINI_API_KEY'))) {
+    issues.push({
+      path: ['GEMINI_API_KEY'],
+      message: 'Al menos una de GEMINI_API_KEY o GEMINI_API_KEYS debe estar presente y no vacía.',
+    });
   }
 
-  if (issueList.length > 0) {
-    const formattedErrors = result.success ? {} : result.error.format();
+  if (issues.length > 0) {
+    console.error('❌ [FATAL BOOT ERROR] Variables de entorno inválidas o ausentes:');
+    issues.forEach((issue) => {
+      console.error(`  • [${issue.path.join('.') || 'ENV'}]: ${issue.message}`);
+    });
 
-    if (exitOnError) {
-      console.error('\n❌ [FATAL DEVSECOPS - BOOT ABORTED] Variables de entorno críticas ausentes o inválidas:');
-      issueList.forEach((issue) => {
-        console.error(`  • [${issue.variable || 'ENV'}]: ${issue.message}`);
-      });
-      console.error('\nVerifica tu archivo .env o la configuración de Dokploy VPS antes de reiniciar.\n');
+    const isTest = (env?.NODE_ENV === 'test') || (process.env.NODE_ENV === 'test');
+    const shouldExit = exitOnError !== null ? exitOnError : !isTest;
+
+    if (shouldExit) {
       process.exit(1);
     }
 
-    return {
-      success: false,
-      errors: formattedErrors,
-      issues: issueList,
-    };
+    const errorDetails = issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
+    const err = new Error(`[FATAL BOOT ERROR] Variables de entorno inválidas o ausentes: ${errorDetails}`);
+    err.issues = issues;
+    throw err;
   }
 
-  return {
-    success: true,
-    data: result.data,
-  };
+  return result.data;
 }
 
 export default validateEnv;

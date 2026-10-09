@@ -5,7 +5,7 @@ import { prisma as defaultPrisma } from '../core/prisma.js';
 
 export class EmbeddingService {
   constructor(depsOrPrisma = {}, maybeAi = null) {
-    if (depsOrPrisma && (depsOrPrisma.$executeRawUnsafe || depsOrPrisma.$transaction || depsOrPrisma.document)) {
+    if (depsOrPrisma && (depsOrPrisma.$queryRaw || depsOrPrisma.$queryRawUnsafe || depsOrPrisma.$executeRawUnsafe || depsOrPrisma.$transaction || depsOrPrisma.document)) {
       this.prisma = depsOrPrisma;
       this.ai = maybeAi;
     } else {
@@ -129,11 +129,13 @@ export class EmbeddingService {
     }
 
     const vectorStr = `[${queryVector.join(',')}]`;
-    const categoryClause = category ? Prisma.sql`AND category = ${category}` : Prisma.empty;
-    const excludeCategoryClause = excludeCategory ? Prisma.sql`AND category != ${excludeCategory}` : Prisma.empty;
 
     let memories;
     if (this.prisma.$queryRaw && !this.prisma._data) {
+      // Prisma real con pgvector: parámetros vinculados de forma segura con Prisma.sql
+      const categoryClause = category ? Prisma.sql`AND category = ${category}` : Prisma.empty;
+      const excludeCategoryClause = excludeCategory ? Prisma.sql`AND category != ${excludeCategory}` : Prisma.empty;
+
       memories = await this.prisma.$queryRaw(Prisma.sql`
         SELECT id, category, content, metadata, "createdAt",
                 1 - (embedding <=> ${vectorStr}::vector) as similarity
@@ -146,23 +148,32 @@ export class EmbeddingService {
         LIMIT ${limit}
       `);
     } else {
-      // Compatibilidad con arnés mock en pruebas unitarias
-      const catSql = category ? `AND category = '${category.replace(/'/g, "''")}'` : '';
-      const exCatSql = excludeCategory ? `AND category != '${excludeCategory.replace(/'/g, "''")}'` : '';
-      memories = await this.prisma.$queryRawUnsafe(
-        `SELECT id, category, content, metadata, "createdAt",
+      // Compatibilidad y blindaje con parámetros posicionales ($1, $2, $3, $4, $5) sin interpolación
+      const queryParams = [vectorStr, minSimilarity, limit];
+      let catFilterSql = '';
+      let exFilterSql = '';
+
+      if (category) {
+        queryParams.push(category);
+        catFilterSql = ` AND category = $${queryParams.length}`;
+      }
+
+      if (excludeCategory) {
+        queryParams.push(excludeCategory);
+        exFilterSql = ` AND category != $${queryParams.length}`;
+      }
+
+      const sql = `SELECT id, category, content, metadata, "createdAt",
                 1 - (embedding <=> $1::vector) as similarity
          FROM "SemanticMemory"
          WHERE embedding IS NOT NULL
-         ${catSql}
-         ${exCatSql}
+         ${catFilterSql}
+         ${exFilterSql}
          AND (1 - (embedding <=> $1::vector)) >= $2
          ORDER BY embedding <=> $1::vector ASC
-         LIMIT $3`,
-        vectorStr,
-        minSimilarity,
-        limit
-      );
+         LIMIT $3`;
+
+      memories = await this.prisma.$queryRawUnsafe(sql, ...queryParams);
     }
 
     return (memories || []).map((m) => ({

@@ -411,11 +411,11 @@ class MockPrismaClient {
       const minSimilarity = typeof params[1] === 'number' ? params[1] : 0.55;
       const limit = typeof params[2] === 'number' ? params[2] : 3;
 
-      const catMatch = query.match(/AND category = '([^']+)'/);
-      const categoryFilter = catMatch ? catMatch[1] : null;
+      const catMatch = query.match(/AND category = '([^']+)'/) || query.match(/AND category = \$(\d+)/);
+      const categoryFilter = catMatch ? (catMatch[0].includes('$') ? params[parseInt(catMatch[1], 10) - 1] : catMatch[1]) : null;
 
-      const excludeCatMatch = query.match(/AND category != '([^']+)'/);
-      const excludeCategoryFilter = excludeCatMatch ? excludeCatMatch[1] : null;
+      const excludeCatMatch = query.match(/AND category != '([^']+)'/) || query.match(/AND category != \$(\d+)/);
+      const excludeCategoryFilter = excludeCatMatch ? (excludeCatMatch[0].includes('$') ? params[parseInt(excludeCatMatch[1], 10) - 1] : excludeCatMatch[1]) : null;
 
       function cosineSimilarity(a, b) {
         if (!a || !b || a.length !== b.length) return 0;

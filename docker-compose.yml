@@ -21,7 +21,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3050
-      DATABASE_URL: postgresql://carmencita_user:***@carmencita-db:5432/carmencita_db?schema=public
+      DATABASE_URL: postgresql://carmencita_user:${DB_PASSWORD:-carmencita_secure_pass_2026}@carmencita-db:5432/carmencita_db?schema=public
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
       GEMINI_API_KEY: ${GEMINI_API_KEY}

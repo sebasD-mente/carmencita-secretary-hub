@@ -7,28 +7,42 @@ const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
 
 // Lista blanca estricta e inmutable de comandos de solo lectura para telemetría
-const ALLOWED_TELEMETRY = {
+const ALLOWED_TELEMETRY = Object.freeze({
   status: 'uptime -p && free -h && df -h /',
   docker: 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"',
   system: 'hostname && uname -a && uptime -p',
-};
+});
 
-const ALLOWED_TELEMETRY_WIN = {
+const ALLOWED_TELEMETRY_WIN = Object.freeze({
   status: 'hostname; (Get-CimInstance Win32_OperatingSystem).Caption; (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB',
   docker: 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"',
   system: 'hostname; (Get-CimInstance Win32_OperatingSystem).Caption',
-};
+});
+
+/**
+ * Sanitiza el prompt entrante para prevenir inyecciones de comandos shell
+ * @param {string} prompt
+ * @returns {string}
+ */
+export function sanitizeShellPrompt(prompt) {
+  if (!prompt || typeof prompt !== 'string') return '';
+  return prompt
+    .replace(/[;&|`]/g, ' ')
+    .replace(/\$\([^)]*\)/g, '')
+    .replace(/\$\{[^}]*\)/g, '')
+    .trim();
+}
 
 function resolveWhitelistedTelemetry(prompt) {
   if (!prompt || typeof prompt !== 'string') return null;
   const p = prompt.trim().toLowerCase();
 
   let key = null;
-  if (p === 'status' || /^(status|uptime|recursos|memoria|ram|disco|espacio|servidor|carga)/i.test(p)) {
+  if (p === 'status' || /^(status|uptime|recursos|memoria|ram|disco|espacio|servidor|carga)$/i.test(p)) {
     key = 'status';
-  } else if (p === 'docker' || /^(docker|contenedores?|containers?|dokploy)/i.test(p)) {
+  } else if (p === 'docker' || /^(docker|contenedores?|containers?|dokploy)$/i.test(p)) {
     key = 'docker';
-  } else if (p === 'system' || /^(system|sistema|hostname|uname|os|especificaciones)/i.test(p)) {
+  } else if (p === 'system' || /^(system|sistema|hostname|uname|os|especificaciones)$/i.test(p)) {
     key = 'system';
   } else {
     for (const [k, cmd] of Object.entries(ALLOWED_TELEMETRY)) {
@@ -50,11 +64,8 @@ export class AgyBridge {
   }
 
   _resolveAgyBinPath(candidate) {
-    // 1. Si existe en disco, usarlo de inmediato
     if (candidate && fs.existsSync(candidate)) return candidate;
-    // 2. Si se suministró un candidato explícito para pruebas o ruta forzada que no es el alias genérico 'agy', respetarlo para permitir testeo de fallback
     if (candidate && candidate !== 'agy') return candidate;
-    // 3. Fallback a rutas comunes conocidas
     const commonPaths = ['/root/.local/bin/agy', '/usr/local/bin/agy', 'agy'];
     for (const p of commonPaths) {
       if (fs.existsSync(p)) return p;
@@ -73,9 +84,15 @@ export class AgyBridge {
       };
     }
 
+    // Sanitización perimetral contra inyecciones de comandos shell (|, ;, &&, $(), backticks)
+    const cleanPrompt = sanitizeShellPrompt(prompt);
+
     // Filtrado de comandos destructivos o de elevación de privilegios
-    if (/\b(sudo|su\s+-|chmod\s+777|rm\s+-rf\s+\/|mkfs|shutdown|reboot)\b/i.test(prompt)) {
-      console.warn(`[AGY Bridge Security] Bloqueo de seguridad: prompt "${prompt}" contiene comandos no autorizados.`);
+    if (
+      /\b(sudo|su\s+-|chmod\s+777|rm\s+-rf\s+\/|mkfs|shutdown|reboot)\b/i.test(prompt) ||
+      /\b(sudo|su\s+-|chmod\s+777|rm\s+-rf\s+\/|mkfs|shutdown|reboot)\b/i.test(cleanPrompt)
+    ) {
+      console.warn(`[AGY Bridge Security] Bloqueo de seguridad: prompt contiene comandos no autorizados.`);
       return {
         success: false,
         mode: 'Security Guard',
@@ -83,10 +100,10 @@ export class AgyBridge {
       };
     }
 
-    console.log(`🤖 [AGY Bridge] Despachando tarea a la terminal: "${prompt.slice(0, 80)}..."`);
+    console.log(`🤖 [AGY Bridge] Despachando tarea a la terminal: "${cleanPrompt.slice(0, 80)}..."`);
     const args = [
       '-p',
-      prompt,
+      cleanPrompt,
       '--dangerously-skip-permissions',
       '--model',
       model,
@@ -112,7 +129,7 @@ export class AgyBridge {
         console.warn(`[AGY Bridge Security] '${this.binPath}' no encontrado. Evaluando lista blanca de telemetría...`);
 
         // Evaluación estricta de seguridad: CERO ejecución de comandos arbitrarios
-        const safeCmd = resolveWhitelistedTelemetry(prompt);
+        const safeCmd = resolveWhitelistedTelemetry(cleanPrompt);
 
         if (!safeCmd) {
           console.warn(`[AGY Bridge Security] Bloqueo de seguridad: prompt "${prompt}" no autorizado en lista blanca.`);
@@ -158,3 +175,5 @@ export class AgyBridge {
     }
   }
 }
+
+export default AgyBridge;

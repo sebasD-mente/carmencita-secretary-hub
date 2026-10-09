@@ -12,3 +12,5 @@ data/documentos/*
 !data/documentos/.gitkeep
 data/media/qr/*
 !data/media/qr/.gitkeep
+backups/
+*.sql.gz

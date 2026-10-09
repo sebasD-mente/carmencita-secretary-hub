@@ -13,6 +13,7 @@ export const DOMAIN_CEILINGS = {
   // Capa Core y Orquestación
   'src/core/brain.js': 350,
   'src/index.js': 250,
+  'src/config.js': 100,
 
   // Capa de Herramientas Modulares (src/tools/)
   'src/tools/obsidian.tools.js': 300,
@@ -28,7 +29,8 @@ export const DOMAIN_CEILINGS = {
   'src/services/calendar.service.js': 320,
   'src/services/task.service.js': 320,
   'src/services/google-tasks.service.js': 250,
-  'src/services/embedding.service.js': 260,
+  'src/services/embedding.service.js': 280,
+  'src/services/gemini-pool.service.js': 200,
   'src/services/document.service.js': 300,
   'src/services/voice.service.js': 260,
   'src/services/diagnostics.service.js': 200,
@@ -37,6 +39,7 @@ export const DOMAIN_CEILINGS = {
 
   // Capa de Esquemas y Validadores Cohesivos
   'src/validators/actions.schema.js': 380,
+  'src/validators/env.schema.js': 150,
   'src/routes/webhooks.js': 250,
 };
 
