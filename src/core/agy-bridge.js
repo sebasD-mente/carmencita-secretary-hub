@@ -63,6 +63,26 @@ export class AgyBridge {
   }
 
   async executeTask(prompt, { timeoutMs = 90000, model = this.model, cwd = process.cwd() } = {}) {
+    // Restricción estricta de seguridad: Prohibido ejecutar comandos de sistema como usuario root (UID 0)
+    if (typeof process.getuid === 'function' && process.getuid() === 0 && !process.env.ALLOW_ROOT_EXEC) {
+      console.warn('[AGY Bridge Security] Bloqueo de seguridad: intento de ejecución como usuario root denegado.');
+      return {
+        success: false,
+        mode: 'Security Guard',
+        output: 'Ejecución denegada: no se permite la ejecución de tareas del sistema con privilegios de superusuario (root).',
+      };
+    }
+
+    // Filtrado de comandos destructivos o de elevación de privilegios
+    if (/\b(sudo|su\s+-|chmod\s+777|rm\s+-rf\s+\/|mkfs|shutdown|reboot)\b/i.test(prompt)) {
+      console.warn(`[AGY Bridge Security] Bloqueo de seguridad: prompt "${prompt}" contiene comandos no autorizados.`);
+      return {
+        success: false,
+        mode: 'Security Guard',
+        output: 'Ejecución denegada: comando no autorizado en la lista blanca de seguridad.',
+      };
+    }
+
     console.log(`🤖 [AGY Bridge] Despachando tarea a la terminal: "${prompt.slice(0, 80)}..."`);
     const args = [
       '-p',

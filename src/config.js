@@ -1,15 +1,22 @@
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateEnv } from './validators/env.schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
+// Fail-fast coercitivo en arranque para producción Dokploy VPS
+if (process.env.NODE_ENV === 'production') {
+  validateEnv(process.env, { exitOnError: true });
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3050', 10),
-  host: process.env.HOST || '127.0.0.1', // Blindaje perimetral: bind exclusivo a localhost
+  // Host binding flexible: 0.0.0.0 para contenedores Docker/Dokploy, 127.0.0.1 para desarrollo local
+  host: process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
   apiKey: process.env.CARMENCITA_API_KEY || '',
   storageDir: process.env.STORAGE_DIR || path.resolve(__dirname, '../data'),
   databaseUrl: process.env.DATABASE_URL || '',
@@ -38,6 +45,11 @@ export const config = {
   // AI & Reasoning Engine
   ai: {
     geminiApiKey: process.env.GEMINI_API_KEY || '',
+    // Pool rotativo de llaves para tolerancia a 429
+    geminiApiKeys: (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
+      .split(',')
+      .map(k => k.trim())
+      .filter(Boolean),
     modelName: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
     modelPool: (process.env.GEMINI_MODEL_POOL || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest')
       .split(',')
