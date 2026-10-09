@@ -2,8 +2,9 @@ import { prisma } from '../core/prisma.js';
 import { config } from '../config.js';
 import { defaultObsidianDriveService } from '../services/obsidian-drive.service.js';
 import { defaultEmbeddingService } from '../services/embedding.service.js';
+import { defaultDiagnosticsService } from '../services/diagnostics.service.js';
 
-export function registerRoutes(fastify, { brain, documentService, taskService, ideaService, calendarService, contactService, telegramAdapter, whatsappAdapter }) {
+export function registerRoutes(fastify, { brain, documentService, taskService, ideaService, calendarService, contactService, telegramAdapter, whatsappAdapter, diagnosticsService }) {
   // --- MIDDLEWARE GLOBAL DE SEGURIDAD PARA RUTAS /api/* ---
   fastify.addHook('preHandler', async (request, reply) => {
     if (request.url.startsWith('/api/')) {
@@ -157,5 +158,11 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
       message: 'Sincronización de Obsidian Vault a SemanticMemory completada exitosamente.',
       data: result,
     };
+  });
+
+  // 10. Telemetría SRE Operativa en Tiempo Real
+  fastify.get('/api/metrics', async () => {
+    const diagSvc = diagnosticsService || defaultDiagnosticsService;
+    return await diagSvc.collectMetrics({ telegramAdapter, whatsappAdapter });
   });
 }

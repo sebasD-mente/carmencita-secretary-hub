@@ -89,6 +89,7 @@ async function main() {
     contactService,
     telegramAdapter,
     whatsappAdapter,
+    diagnosticsService: defaultDiagnosticsService,
   });
 
   // 6. Arrancar Servidor HTTP

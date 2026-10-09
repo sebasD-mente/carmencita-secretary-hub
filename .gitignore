@@ -14,3 +14,5 @@ data/media/qr/*
 !data/media/qr/.gitkeep
 backups/
 *.sql.gz
+reports/*
+!reports/.gitkeep

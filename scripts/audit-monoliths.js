@@ -30,7 +30,9 @@ export const DOMAIN_CEILINGS = {
 
   // Capa de Servicios Especializados (src/services/)
   'src/services/executive-briefing.service.js': 350,
-  'src/services/obsidian-drive.service.js': 950,
+  'src/services/obsidian-drive.service.js': 350,
+  'src/services/obsidian/drive-vault.client.js': 280,
+  'src/services/obsidian/markdown-serializer.js': 220,
   'src/services/gmail.service.js': 380,
   'src/services/calendar.service.js': 320,
   'src/services/task.service.js': 320,
@@ -51,6 +53,9 @@ export const DOMAIN_CEILINGS = {
   // Capa de Adaptadores e Integración
   'src/adapters/session-queue.js': 200,
   'src/adapters/telegram.js': 650,
+
+  // Scripts de Verificación y DevOps
+  'scripts/verify-prod.js': 250,
 };
 
 export const LAYER_DEFAULT_CEILINGS = {

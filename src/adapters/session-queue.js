@@ -12,6 +12,10 @@ export class UserSessionQueue {
     this._userQueues = new Map();
     // Map<string, number> - Conteo de tareas pendientes y en ejecución por usuario
     this._queueLengths = new Map();
+    // Métricas SRE de ciclo de vida
+    this._totalEnqueued = 0;
+    this._totalCompleted = 0;
+    this._totalRejected = 0;
   }
 
   /**
@@ -27,6 +31,7 @@ export class UserSessionQueue {
       throw new TypeError('UserSessionQueue.enqueue: taskFn debe ser una función.');
     }
 
+    this._totalEnqueued++;
     const key = String(userId || 'default');
     const currentPromise = this._userQueues.get(key) || Promise.resolve();
     const currentCount = this._queueLengths.get(key) || 0;
@@ -34,7 +39,12 @@ export class UserSessionQueue {
 
     const executeTask = async () => {
       try {
-        return await taskFn();
+        const result = await taskFn();
+        this._totalCompleted++;
+        return result;
+      } catch (err) {
+        this._totalRejected++;
+        throw err;
       } finally {
         const remainingCount = (this._queueLengths.get(key) || 1) - 1;
         if (remainingCount <= 0) {
@@ -77,6 +87,28 @@ export class UserSessionQueue {
    */
   getActiveUsersCount() {
     return this._userQueues.size;
+  }
+
+  /**
+   * Métricas operativas de la cola para telemetría SRE.
+   * @returns {{ activeTasks: number, activeUsers: number, totalEnqueued: number, totalCompleted: number, totalRejected: number }}
+   */
+  getMetrics() {
+    let activeTasks = 0;
+    for (const count of this._queueLengths.values()) {
+      activeTasks += count;
+    }
+    return {
+      activeTasks,
+      activeUsers: this._userQueues.size,
+      totalEnqueued: this._totalEnqueued,
+      totalCompleted: this._totalCompleted,
+      totalRejected: this._totalRejected,
+    };
+  }
+
+  getStats() {
+    return this.getMetrics();
   }
 }
 
