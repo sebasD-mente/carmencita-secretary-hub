@@ -260,9 +260,9 @@ export class SchedulerService {
     let messages = [];
     try {
       if (typeof this.gmailService.getUnreadInboxMessages === 'function') {
-        messages = await this.gmailService.getUnreadInboxMessages({ maxResults: 10, onlyImportant: false });
+        messages = await this.gmailService.getUnreadInboxMessages({ maxResults: 25, onlyImportant: false });
       } else if (typeof this.gmailService.getInboxSummary === 'function') {
-        const summary = await this.gmailService.getInboxSummary({ maxResults: 10 });
+        const summary = await this.gmailService.getInboxSummary({ maxResults: 25 });
         messages = summary?.messages || [];
       }
     } catch (err) {
@@ -287,6 +287,16 @@ export class SchedulerService {
       }
 
       if (alreadyNotified || this.notifiedEmailIds?.has(m.id)) continue;
+
+      // Filtro de Ventana Temporal Fresca (2 Horas) [DEKO-CARMEN-048]
+      const emailDate = m.date ? new Date(m.date) : null;
+      const twoHoursAgo = nowMs - (2 * 60 * 60 * 1000);
+      if (emailDate && !isNaN(emailDate.getTime()) && emailDate.getTime() < twoHoursAgo) {
+        // Correo antiguo: registrar silenciosamente en NotifiedEmail para no volver a evaluar, pero NO despachar alerta como "nuevo"
+        const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+        await this._recordNotifiedEmail(m, fromClean);
+        continue;
+      }
 
       let triageResult = null;
       if (this.emailTriageService?.classifyEmail) {
@@ -364,39 +374,18 @@ export class SchedulerService {
       }
     }
 
-    if (priorityBatch.length === 1) {
-      const item = priorityBatch[0];
-      const fromClean = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
-      const snippetClean = item.email.snippet ? item.email.snippet.slice(0, 120).replace(/\n/g, ' ') : '';
-      const msg = `✉️ <b>¡Jefecito, acaba de entrar un correo importante!</b>\n\n👤 <b>De:</b> ${fromClean}\n📌 <i>${item.email.subject || '(Sin asunto)'}</i>\n${snippetClean}\n\n¿Quieres que prepare una respuesta o lo revisamos más tarde?`;
-      await this._dispatchTelegram(msg);
-      await this._recordNotifiedEmail(item.email, fromClean);
-      notified.push({ email: item.email, message: msg, classification: item.classification });
-    } else if (priorityBatch.length > 1) {
-      const lines = priorityBatch.map((item) => {
-        const cat = item.classification?.category;
-        const icon = (cat === 'INFRAESTRUCTURA' || cat === EmailCategory.INFRAESTRUCTURA) ? '🔴'
-          : (cat === 'FINANCIERO' || cat === EmailCategory.FINANCIERO) ? '🟢'
-          : (cat === 'CLIENTE_NEGOCIO' || cat === EmailCategory.CLIENTE_NEGOCIO) ? '💼'
-          : (cat === 'SUSCRIPCION' || cat === EmailCategory.SUSCRIPCION) ? '💳' : '📌';
-        const senderName = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
-        const summary = item.classification?.oneLineSummary || item.email.subject || '(Sin Asunto)';
-        return `${icon} <b>${senderName}:</b> <i>${summary}</i>`;
-      });
+    if (priorityBatch.length > 0) {
+      const naturalBriefing = typeof this.emailTriageService?.generateExecutiveEmailBriefing === 'function'
+        ? await this.emailTriageService.generateExecutiveEmailBriefing(priorityBatch)
+        : null;
 
-      const batchMsg = [
-        '✉️ <b>¡Sebas, novedades importantes en tu correo!</b>',
-        '',
-        ...lines,
-        '',
-        '¿Deseas que prepare alguna respuesta o gestione algo de inmediato?',
-      ].join('\n');
-
-      await this._dispatchTelegram(batchMsg);
-      for (const item of priorityBatch) {
-        const fromClean = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
-        await this._recordNotifiedEmail(item.email, fromClean);
-        notified.push({ email: item.email, message: batchMsg, classification: item.classification });
+      if (naturalBriefing) {
+        await this._dispatchTelegram(naturalBriefing);
+        for (const item of priorityBatch) {
+          const fromClean = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+          await this._recordNotifiedEmail(item.email, fromClean);
+          notified.push({ email: item.email, message: naturalBriefing, classification: item.classification });
+        }
       }
     }
 

@@ -4,12 +4,7 @@ import { defaultGeminiPool } from './gemini-pool.service.js';
 /**
  * 🏛️ EmailTriageService - Triaje Cognitivo de Gmail y Radar VIP [DEKO-CARMEN-047]
  */
-export const EmailUrgency = Object.freeze({
-  CRITICO: 'CRITICO',
-  ALTA: 'ALTA',
-  MEDIA: 'MEDIA',
-  RUIDO: 'RUIDO',
-});
+export const EmailUrgency = Object.freeze({ CRITICO: 'CRITICO', ALTA: 'ALTA', MEDIA: 'MEDIA', RUIDO: 'RUIDO' });
 
 export const EmailCategory = Object.freeze({
   INFRAESTRUCTURA: 'INFRAESTRUCTURA',
@@ -21,14 +16,7 @@ export const EmailCategory = Object.freeze({
 });
 
 export const EmailTriageOutputSchema = z.object({
-  category: z.enum([
-    'INFRAESTRUCTURA',
-    'FINANCIERO',
-    'CLIENTE_NEGOCIO',
-    'SUSCRIPCION',
-    'EMERGENCIA_SEBASTIAN',
-    'RUIDO',
-  ]),
+  category: z.enum(['INFRAESTRUCTURA', 'FINANCIERO', 'CLIENTE_NEGOCIO', 'SUSCRIPCION', 'EMERGENCIA_SEBASTIAN', 'RUIDO']),
   urgency: z.enum(['CRITICO', 'ALTA', 'MEDIA', 'RUIDO']),
   isActionable: z.boolean().default(false),
   executiveReason: z.string().default(''),
@@ -145,58 +133,106 @@ Devuelve EXCLUSIVAMENTE este JSON:
   _classifyHeuristically({ from, subject, snippet, bodyText }) {
     const textAll = `${from} ${subject} ${snippet} ${bodyText}`.toLowerCase();
     if (NOISE_KEYWORDS.test(textAll) && !/alerta|seguridad|cuenta suspendida/i.test(subject)) {
-      return {
-        category: EmailCategory.RUIDO,
-        urgency: EmailUrgency.RUIDO,
-        isActionable: false,
-        executiveReason: 'Filtro de ruido: publicidad o boletín masivo',
-        oneLineSummary: subject || 'Publicidad descartada',
-      };
+      return { category: EmailCategory.RUIDO, urgency: EmailUrgency.RUIDO, isActionable: false, executiveReason: 'Filtro de ruido: publicidad o boletín masivo', oneLineSummary: subject || 'Publicidad descartada' };
     }
     if (/google/i.test(from) && INFRA_KEYWORDS.test(textAll)) {
-      return {
-        category: EmailCategory.INFRAESTRUCTURA,
-        urgency: EmailUrgency.CRITICO,
-        isActionable: true,
-        executiveReason: 'Alerta crítica de infraestructura Google / Spend Caps',
-        oneLineSummary: subject || 'Alerta de Infraestructura Google',
-      };
+      return { category: EmailCategory.INFRAESTRUCTURA, urgency: EmailUrgency.CRITICO, isActionable: true, executiveReason: 'Alerta crítica de infraestructura Google / Spend Caps', oneLineSummary: subject || 'Alerta de Infraestructura Google' };
     }
     if (FINANCIAL_KEYWORDS.test(textAll)) {
-      return {
-        category: EmailCategory.FINANCIERO,
-        urgency: EmailUrgency.CRITICO,
-        isActionable: true,
-        executiveReason: 'Movimiento bancario guatemalteco o aviso fiscal SAT',
-        oneLineSummary: subject || 'Notificación Financiera',
-      };
+      return { category: EmailCategory.FINANCIERO, urgency: EmailUrgency.CRITICO, isActionable: true, executiveReason: 'Movimiento bancario guatemalteco o aviso fiscal SAT', oneLineSummary: subject || 'Notificación Financiera' };
     }
     if (BUSINESS_KEYWORDS.test(textAll)) {
-      return {
-        category: EmailCategory.CLIENTE_NEGOCIO,
-        urgency: EmailUrgency.ALTA,
-        isActionable: true,
-        executiveReason: 'Consulta o requerimiento de stand / cliente comercial',
-        oneLineSummary: subject || 'Contacto de Negocio',
-      };
+      return { category: EmailCategory.CLIENTE_NEGOCIO, urgency: EmailUrgency.ALTA, isActionable: true, executiveReason: 'Consulta o requerimiento de stand / cliente comercial', oneLineSummary: subject || 'Contacto de Negocio' };
     }
     if (SUBSCRIPTION_KEYWORDS.test(textAll)) {
-      return {
-        category: EmailCategory.SUSCRIPCION,
-        urgency: EmailUrgency.ALTA,
-        isActionable: true,
-        executiveReason: 'Aviso de suscripción de plataforma de desarrollo',
-        oneLineSummary: subject || 'Renovación de Suscripción',
-      };
+      return { category: EmailCategory.SUSCRIPCION, urgency: EmailUrgency.ALTA, isActionable: true, executiveReason: 'Aviso de suscripción de plataforma de desarrollo', oneLineSummary: subject || 'Renovación de Suscripción' };
     }
-    return {
-      category: EmailCategory.RUIDO,
-      urgency: EmailUrgency.RUIDO,
-      isActionable: false,
-      executiveReason: 'Correo informativo general sin requerimiento de acción',
-      oneLineSummary: subject || 'Correo general',
-    };
+    return { category: EmailCategory.RUIDO, urgency: EmailUrgency.RUIDO, isActionable: false, executiveReason: 'Correo informativo general sin requerimiento de acción', oneLineSummary: subject || 'Correo general' };
+  }
+
+  /**
+   * Genera una síntesis ejecutiva natural, cálida y sin plantillas quemadas para Telegram [DEKO-CARMEN-048]
+   * @param {Array<{email: Object, classification: Object}>} priorityItems
+   * @returns {Promise<string>}
+   */
+  async generateExecutiveEmailBriefing(priorityItems = []) {
+    if (!priorityItems || priorityItems.length === 0) return '';
+
+    const aiClient = this.ai || this.geminiPool?.getClient();
+    if (!aiClient?.models?.generateContent) {
+      return this._fallbackDynamicBriefing(priorityItems);
+    }
+
+    const itemsData = priorityItems.map((item) => ({
+      remitente: item.email?.from,
+      asunto: item.email?.subject,
+      categoria: item.classification?.category,
+      urgencia: item.classification?.urgency,
+      esNoReply: /no[-_]?reply|noreply|donotreply/i.test(item.email?.from || ''),
+      resumen: item.classification?.oneLineSummary || item.email?.snippet,
+    }));
+
+    const prompt = `Eres Carmencita, la Chief of Staff ejecutiva de Sebastián Jiménez en DeKo Labs.
+Redacta una notificación breve, natural, humana y ejecutiva para Telegram sobre estas novedades de correo.
+
+REGLAS INQUEBRANTABLES:
+1. CERO PLANTILLAS QUEMADAS: Prohibido terminar con "¿Deseas que prepare una respuesta?" o frases repetitivas de chatbot.
+2. DISCERNIMIENTO REAL: Si son correos automáticos o no-reply (recibos de pago, Google Cloud, Apple), dile con naturalidad que el cobro/alerta pasó con éxito y que NO requiere ninguna acción de su parte.
+3. Si hay un cliente o asunto de acción real, proponle la acción concreta de forma ejecutiva.
+4. Tono: Respetuoso, ágil, cálido y profesional ("Sebas", "Jefe").
+5. Formato: Telegram HTML limpio.
+
+DATOS DE CORREOS:
+${JSON.stringify(itemsData, null, 2)}`;
+
+    try {
+      const res = await aiClient.models.generateContent({
+        model: this.modelName || 'gemini-2.5-flash-lite',
+        contents: prompt,
+        config: { temperature: 0.3 },
+      });
+      const text = typeof res?.text === 'function' ? res.text() : (res?.text || '');
+      return text.trim() || this._fallbackDynamicBriefing(priorityItems);
+    } catch {
+      return this._fallbackDynamicBriefing(priorityItems);
+    }
+  }
+
+  _fallbackDynamicBriefing(priorityItems = []) {
+    if (!priorityItems || priorityItems.length === 0) return '';
+    const lines = priorityItems.map((item) => {
+      const fromClean = (item.email?.from || 'Remitente').replace(/<[^>]+>/, '').trim();
+      const subject = item.email?.subject || '(Sin Asunto)';
+      const summary = item.classification?.oneLineSummary || item.email?.snippet || subject;
+      const isNoReply = /no[-_]?reply|noreply|donotreply/i.test(item.email?.from || '');
+      const cat = item.classification?.category;
+      const icon = (cat === 'INFRAESTRUCTURA' || cat === EmailCategory.INFRAESTRUCTURA) ? '🔴'
+        : (cat === 'FINANCIERO' || cat === EmailCategory.FINANCIERO) ? '🟢'
+        : (cat === 'CLIENTE_NEGOCIO' || cat === EmailCategory.CLIENTE_NEGOCIO) ? '💼'
+        : (cat === 'SUSCRIPCION' || cat === EmailCategory.SUSCRIPCION) ? '💳' : '📌';
+      return { fromClean, subject, summary, isNoReply, icon, cat };
+    });
+
+    if (lines.length === 1) {
+      const it = lines[0];
+      const isAuto = it.isNoReply || it.cat === 'INFRAESTRUCTURA' || it.cat === 'FINANCIERO' || it.cat === 'SUSCRIPCION';
+      const footer = isAuto
+        ? 'ℹ️ Es una confirmación o alerta del sistema en orden; no requiere acción de tu parte.'
+        : 'Quedo atenta si decides que avancemos con alguna gestión.';
+      return `✉️ <b>¡Jefecito, acaba de entrar un correo importante!</b>\n\n${it.icon} <b>De:</b> ${it.fromClean}\n📌 <i>${it.subject}</i>\n${it.summary}\n\n${footer}`;
+    }
+
+    const allAuto = lines.every((l) => l.isNoReply || l.cat === 'INFRAESTRUCTURA' || l.cat === 'FINANCIERO');
+    const header = allAuto
+      ? '✉️ <b>Sebas, entraron estas actualizaciones automáticas:</b>'
+      : '✉️ <b>Sebas, novedades importantes en tu bandeja:</b>';
+    const footer = allAuto
+      ? 'ℹ️ Son avisos de servicio en orden; todo operando normalmente y sin acción requerida.'
+      : 'Quedo atenta a tus instrucciones si deseas priorizar alguna.';
+    const items = lines.map((l) => `${l.icon} <b>${l.fromClean}:</b> <i>${l.summary}</i>`).join('\n');
+    return `${header}\n\n${items}\n\n${footer}`;
   }
 }
 
 export const defaultEmailTriageService = new EmailTriageService();
+

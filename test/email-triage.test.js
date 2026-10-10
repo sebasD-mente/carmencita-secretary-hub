@@ -265,14 +265,14 @@ test('🧠 Suite Coercitiva: Motor de Triaje Cognitivo Gmail, Radar VIP y Canal 
     assert.ok(scheduler.notifiedEmailIds.has('mail_bi_02'));
     assert.ok(!scheduler.notifiedEmailIds.has('mail_spam_03'));
 
-    // Se emitió exactamente 1 mensaje consolidado a Telegram (Batching)
+    // Se emitió exactamente 1 mensaje consolidado a Telegram (Batching) con síntesis ejecutiva
     assert.equal(capturedTg.length, 1);
     const batchMessage = capturedTg[0].text;
-    assert.ok(batchMessage.includes('¡Sebas, novedades importantes en tu correo!'));
     assert.ok(batchMessage.includes('Google Cloud Platform'));
     assert.ok(batchMessage.includes('Banco Industrial'));
     assert.ok(!batchMessage.includes('Uber Eats'));
-    assert.ok(batchMessage.includes('¿Deseas que prepare alguna respuesta o gestione algo de inmediato?'));
+    assert.ok(!batchMessage.includes('¿Deseas que prepare alguna respuesta'));
+    assert.ok(!batchMessage.includes('¿Quieres que prepare una respuesta'));
   });
 
   await t.test('10. checkInboxWatchdog procesa directiva de emergencia de Sebastián y responde automáticamente vía Gmail', async () => {
@@ -332,5 +332,154 @@ test('🧠 Suite Coercitiva: Motor de Triaje Cognitivo Gmail, Radar VIP y Canal 
     assert.ok(sentEmailPayload.subject.startsWith('Carmencita Comunica: Re:'));
     assert.ok(sentEmailPayload.bodyText.includes('Sebas, he verificado la cotización de Midas'));
     assert.ok(scheduler.notifiedEmailIds.has('mail_emergency_99'));
+  });
+
+  await t.test('11. generateExecutiveEmailBriefing genera síntesis cognitiva con LLM sin plantillas rígidas ni preguntas acartonadas [DEKO-CARMEN-048]', async () => {
+    let capturedPrompt = '';
+    const mockAi = {
+      models: {
+        generateContent: async ({ contents }) => {
+          capturedPrompt = contents;
+          return {
+            text: () => '✉️ <b>Sebas</b>: Carlos de ComicCon escribió consultando dimensiones de stands. Te preparo un borrador cuando gustes.',
+          };
+        },
+      },
+    };
+
+    const triage = new EmailTriageService({ ai: mockAi });
+    const briefing = await triage.generateExecutiveEmailBriefing([
+      {
+        email: { from: 'Carlos Mendoza <carlos@comiccon.gt>', subject: 'Medidas Stand ComicCon', snippet: 'Hola Sebas, requerimos medidas.' },
+        classification: { category: EmailCategory.CLIENTE_NEGOCIO, urgency: EmailUrgency.ALTA, oneLineSummary: 'ComicCon: Solicitud de medidas de stand' },
+      },
+    ]);
+
+    assert.ok(briefing.includes('Carlos de ComicCon'));
+    assert.ok(!briefing.includes('¿Deseas que prepare una respuesta o lo revisamos más tarde?'));
+    assert.ok(!briefing.includes('¿Deseas que prepare alguna respuesta'));
+    assert.ok(capturedPrompt.includes('CERO PLANTILLAS QUEMADAS'));
+    assert.ok(capturedPrompt.includes('DISCERNIMIENTO REAL'));
+  });
+
+  await t.test('12. generateExecutiveEmailBriefing identifica correos automáticos o no-reply e indica que no requieren acción de Sebastián [DEKO-CARMEN-048]', async () => {
+    const triage = new EmailTriageService(); // usa fallback dinámico sin IA
+
+    const briefingNoReply = await triage.generateExecutiveEmailBriefing([
+      {
+        email: { from: 'Apple <no_reply@email.apple.com>', subject: 'Tu recibo de Apple', snippet: 'Suscripción iCloud renovada.' },
+        classification: { category: EmailCategory.SUSCRIPCION, urgency: EmailUrgency.ALTA, oneLineSummary: 'Recibo de renovación Apple' },
+      },
+      {
+        email: { from: 'Google Payments <payments-noreply@google.com>', subject: 'Confirmación de pago de Google Cloud', snippet: 'Pago procesado exitosamente.' },
+        classification: { category: EmailCategory.INFRAESTRUCTURA, urgency: EmailUrgency.CRITICO, oneLineSummary: 'Google Cloud: Pago procesado' },
+      },
+    ]);
+
+    assert.ok(!briefingNoReply.includes('¿Deseas que prepare una respuesta'));
+    assert.ok(!briefingNoReply.includes('¿Quieres que prepare una respuesta'));
+    assert.ok(briefingNoReply.includes('Apple'));
+    assert.ok(briefingNoReply.includes('Google Payments'));
+    assert.ok(briefingNoReply.includes('actualizaciones automáticas') || briefingNoReply.includes('no requiere') || briefingNoReply.includes('en orden'));
+  });
+
+  await t.test('13. checkInboxWatchdog descarta correos con más de 2 horas de antigüedad sin disparar Telegram y los registra silenciosamente [DEKO-CARMEN-048]', async () => {
+    const capturedTg = [];
+    const mockTelegram = {
+      sendMessage: async (chatId, text) => {
+        capturedTg.push({ chatId, text });
+      },
+    };
+
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const oldEmails = [
+      {
+        id: 'mail_old_apple_receipt',
+        from: 'Apple <no_reply@email.apple.com>',
+        subject: 'Recibo antiguo de suscripción',
+        snippet: 'Factura del 9 de octubre.',
+        date: threeHoursAgo,
+      },
+      {
+        id: 'mail_old_gcp_bill',
+        from: 'Google Cloud Billing <billing@google.com>',
+        subject: 'Resumen de facturación de hace 2 días',
+        snippet: 'Resumen mensual.',
+        date: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      },
+    ];
+
+    const notifiedDb = [];
+    const mockPrisma = {
+      notifiedEmail: {
+        findUnique: async () => null,
+        create: async ({ data }) => {
+          notifiedDb.push(data);
+          return data;
+        },
+      },
+    };
+
+    const scheduler = new SchedulerService({
+      telegramAdapter: mockTelegram,
+      gmailService: { getUnreadInboxMessages: async () => oldEmails },
+      prisma: mockPrisma,
+    });
+
+    const now = new Date();
+    const result = await scheduler.checkInboxWatchdog(now, true);
+
+    // No se envía ninguna notificación a Telegram
+    assert.equal(capturedTg.length, 0);
+    assert.equal(result.length, 0);
+
+    // Fueron registrados silenciosamente en NotifiedEmail para evitar reprocesamiento
+    assert.equal(notifiedDb.length, 2);
+    assert.ok(scheduler.notifiedEmailIds.has('mail_old_apple_receipt'));
+    assert.ok(scheduler.notifiedEmailIds.has('mail_old_gcp_bill'));
+  });
+
+  await t.test('14. checkInboxWatchdog procesa correos frescos dentro de la ventana de 2 horas y genera síntesis ejecutiva dinámica [DEKO-CARMEN-048]', async () => {
+    const capturedTg = [];
+    const mockTelegram = {
+      sendMessage: async (chatId, text) => {
+        capturedTg.push({ chatId, text });
+      },
+    };
+
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const freshEmails = [
+      {
+        id: 'mail_fresh_lead',
+        from: 'Feria Midas <ventas@midas.gt>',
+        subject: 'Cotización Urgente para Stand Feria Central',
+        snippet: 'Requerimos cotización hoy mismo.',
+        date: thirtyMinutesAgo,
+      },
+    ];
+
+    const mockPrisma = {
+      notifiedEmail: {
+        findUnique: async () => null,
+        create: async ({ data }) => data,
+      },
+    };
+
+    const scheduler = new SchedulerService({
+      telegramAdapter: mockTelegram,
+      gmailService: { getUnreadInboxMessages: async () => freshEmails },
+      prisma: mockPrisma,
+    });
+
+    const now = new Date();
+    const result = await scheduler.checkInboxWatchdog(now, true);
+
+    assert.equal(result.length, 1);
+    assert.equal(capturedTg.length, 1);
+    const tgMsg = capturedTg[0].text;
+    assert.ok(tgMsg.includes('Feria Midas'));
+    assert.ok(tgMsg.includes('Cotización Urgente para Stand Feria Central'));
+    assert.ok(!tgMsg.includes('¿Deseas que prepare una respuesta o lo revisamos más tarde?'));
+    assert.ok(!tgMsg.includes('¿Quieres que prepare una respuesta'));
   });
 });
