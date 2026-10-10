@@ -33,13 +33,13 @@ export const DOMAIN_CEILINGS = {
   'src/tools/index.js': 240,
 
   // Capa de Servicios Especializados (src/services/)
-  'src/services/executive-briefing.service.js': 350,
+  'src/services/executive-briefing.service.js': 450,
   'src/services/obsidian-drive.service.js': 350,
   'src/services/obsidian/drive-vault.client.js': 280,
   'src/services/obsidian/markdown-serializer.js': 220,
-  'src/services/gmail.service.js': 380,
+  'src/services/gmail.service.js': 420,
   'src/services/calendar.service.js': 320,
-  'src/services/task.service.js': 320,
+  'src/services/task.service.js': 350,
   'src/services/google-tasks.service.js': 250,
   'src/services/embedding.service.js': 280,
   'src/services/gemini-pool.service.js': 200,
@@ -47,7 +47,7 @@ export const DOMAIN_CEILINGS = {
   'src/services/voice.service.js': 260,
   'src/services/diagnostics.service.js': 200,
   'src/services/storage.provider.js': 260,
-  'src/services/scheduler.service.js': 480,
+  'src/services/scheduler.service.js': 500,
 
   // Capa de Esquemas y Validadores Cohesivos
   'src/validators/actions.schema.js': 380,

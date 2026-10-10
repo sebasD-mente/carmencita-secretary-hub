@@ -59,6 +59,46 @@ export class TaskService {
   }
 
   /**
+   * Parser heurístico de recurrencia e intervalos en descripciones de tareas.
+   * Detecta: "cada N horas", "cada hora", "cada N días", "cada día".
+   */
+  _parseRecurrence(description) {
+    if (!description || typeof description !== 'string') {
+      return { isRecurring: false, intervalHours: null };
+    }
+
+    // 1. "cada (\d+) horas?"
+    const hoursMatch = description.match(/cada\s+(\d+)\s+horas?/i);
+    if (hoursMatch) {
+      const hours = parseInt(hoursMatch[1], 10);
+      if (!isNaN(hours) && hours > 0) {
+        return { isRecurring: true, intervalHours: hours };
+      }
+    }
+
+    // 2. "cada hora"
+    if (/cada\s+hora\b/i.test(description)) {
+      return { isRecurring: true, intervalHours: 1 };
+    }
+
+    // 3. "cada (\d+) d[ií]as?"
+    const daysMatch = description.match(/cada\s+(\d+)\s+d[ií]as?/i);
+    if (daysMatch) {
+      const days = parseInt(daysMatch[1], 10);
+      if (!isNaN(days) && days > 0) {
+        return { isRecurring: true, intervalHours: days * 24 };
+      }
+    }
+
+    // 4. "cada d[ií]a" o "diariamente" o "diario"
+    if (/cada\s+d[ií]a\b|diariamente\b|\bdiario\b/i.test(description)) {
+      return { isRecurring: true, intervalHours: 24 };
+    }
+
+    return { isRecurring: false, intervalHours: null };
+  }
+
+  /**
    * Crea una nueva tarea en PostgreSQL con validación Zod y sincronización opcional con Google Tasks.
    */
   async createTask(data) {
@@ -85,12 +125,24 @@ export class TaskService {
       dueDate = this._parseRelativeTime(validated.description);
     }
 
+    const recurrence = this._parseRecurrence(validated.description);
+    const isRecurring = Boolean(data?.isRecurring ?? recurrence.isRecurring);
+    const intervalHours = data?.intervalHours ?? recurrence.intervalHours;
+
+    // Si es recurrente y no tiene dueDate, establecer el primer disparo en NOW() + intervalHours
+    if (isRecurring && !dueDate) {
+      const hoursToAdd = intervalHours || 2;
+      dueDate = new Date(Date.now() + hoursToAdd * 60 * 60 * 1000);
+    }
+
     const task = await this.prisma.task.create({
       data: {
         description: validated.description,
         dueDate,
         priority: validated.priority || 'MEDIA',
         status: 'PENDIENTE',
+        isRecurring,
+        intervalHours,
       },
     });
 
@@ -243,6 +295,20 @@ export class TaskService {
     }
 
     return updated;
+  }
+
+  /**
+   * Completa una tarea expresamente por su ID.
+   */
+  async completeTask(id) {
+    return await this.completeTaskByNameOrId({ id });
+  }
+
+  /**
+   * Cancela una tarea expresamente por su ID.
+   */
+  async cancelTask(id) {
+    return await this.cancelTaskByNameOrId({ id });
   }
 }
 

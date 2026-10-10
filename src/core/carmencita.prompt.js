@@ -19,7 +19,7 @@ Clasifica la información por urgencia, destaca el impacto estratégico y propon
 
 REGLA CARDINAL DE PERSISTENCIA Y COMUNICACIÓN INTER-AGENTES:
 1. COMUNICADOS Y REPORTES DE TRABAJO (GOOGLE DRIVE):
-   Todo comunicado, directiva, informe o tarea emitida por otros agentes (Fred, Gary, Randy, Hermes, Erick, Antigravity) reside única y exclusivamente en Google Drive ('manage_drive', carpeta 'comunicacion' o 'reportes'). Queda TERMINANTEMENTE PROHIBIDO buscar comunicados inter-agentes en Obsidian Vault.
+   Todo comunicado, directiva, informe o tarea emitida por otros agentes (Fred, Gary, Randy, Hermes, Erick, Antigravity) reside única y exclusivamente en Google Drive ('manage_drive', carpeta 'comunicacion' o 'reportes'). Los comunicados inter-agentes no deben buscarse en Obsidian Vault.
 2. NOTAS PERSONALES Y SEGUNDO CEREBRO (OBSIDIAN VAULT):
    El Obsidian Vault ('manage_obsidian_notes') es el espacio íntimo y personal de Sebastián. ÚNICAMENTE se consulta, crea o modifica cuando Sebastián lo solicite de forma explícita ("en mis notas", "en mi obsidian", "en mi segundo cerebro").
 
@@ -36,7 +36,37 @@ export const IMAGE_PROMPT_TEMPLATE = (contextText, directives, memories) =>
 export const DOCUMENT_PROMPT = `Analiza este documento recibido por Carmencita.\nResponde únicamente con un objeto JSON:\n{\n  "category": "FACTURA|CONTRATO|COTIZACION|HOJA_CALCULO|PROYECTO_BRIEF|GENERAL",\n  "summary": "Resumen ejecutivo de 2 líneas",\n  "vendor": "...",\n  "item": "...",\n  "totalAmount": 0,\n  "currency": "GTQ"\n}`;
 
 export const MEMORY_EXTRACT_PROMPT = (userText, historyContent) =>
-  `Analiza esta interacción entre Sebastián y Carmencita:\nUsuario: "${userText}"\nCarmencita: "${historyContent}"\n\n¿Hay algún hecho nuevo, preferencia duradera, directiva de trabajo, proveedor habitual o acuerdo personal relevante que deba recordarse a largo plazo?\nResponde ESTRICTAMENTE con este JSON:\n{\n  "shouldSave": true | false,\n  "category": "PREFERENCIA" | "ACUERDO" | "PROVEEDOR" | "DIRECTIVA" | "GENERAL",\n  "content": "resumen claro en 1 oración del hecho o preferencia"\n}\nSi no hay información nueva o duradera (es solo saludo, consulta puntual o charla casual), responde con shouldSave: false.`;
+  `Analiza esta interacción entre Sebastián y Carmencita:
+Usuario: "${userText}"
+Carmencita: "${historyContent}"
+
+¿Hay algún hecho nuevo, preferencia duradera, directiva de gobernanza, proveedor habitual o acuerdo personal relevante que deba recordarse a largo plazo?
+
+TAXONOMÍA OBLIGATORIA:
+- DIRECTIVA_GOBERNANZA: Protocolos de sistema, límites de acceso, reglas de interacción inter-agentes o de Obsidian/Drive.
+- PREFERENCIA: Gustos, estilo de trabajo, horarios o hábitos personales estables de Sebastián.
+- ACUERDO: Compromisos comerciales duraderos con socios o clientes VIP.
+- PROVEEDOR: Condiciones de crédito, precios recurrentes o datos de contacto de suplidores.
+- FAMILIA_Y_VINCULOS: Hitos familiares, nombres de familiares, aniversarios o bienestar.
+- CONTEXTO_EMPRESARIAL: Decisiones estratégicas históricas de Deco Vintage o DeKo Labs.
+
+COMPUERTA COERCITIVA DE DESCARTE (NUNCA GUARDAR EN MEMORIA):
+Si la interacción trata sobre:
+• Recordatorios con frecuencia o fecha/hora ("avísame cada 2 horas", "recuérdame a las 5", "mañana a las 8").
+• Tareas pendientes puntuales ("comprar tornillos", "fabricar rótulo", "mandar correo").
+• Eventos de agenda, estados de servidor o consultas efímeras.
+DEBES responder ESTRICTAMENTE con:
+{
+  "shouldSave": false,
+  "reason": "ACCION_TRANSACCIONAL_EFIMERA"
+}
+
+Si cumple con un hecho duradero legítimo, responde:
+{
+  "shouldSave": true,
+  "category": "DIRECTIVA_GOBERNANZA" | "PREFERENCIA" | "ACUERDO" | "PROVEEDOR" | "FAMILIA_Y_VINCULOS" | "CONTEXTO_EMPRESARIAL",
+  "content": "resumen claro en 1 oración del hecho o preferencia"
+}`;
 
 export const TOOL_SYNTHESIS_PROMPT = (userText, toolName, dataSummary, timeContext = '') =>
   `Eres Carmencita, la secretaria ejecutiva de alta dirección de Sebastián Jiménez.

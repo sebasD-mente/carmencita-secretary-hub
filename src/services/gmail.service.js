@@ -39,6 +39,41 @@ export function isPromotionalOrNoise({ from = '', subject = '', snippet = '', ha
   return false;
 }
 
+export const OFFICIAL_OR_CRITICAL_SENDERS = /(?:google|apple|microsoft|banco|bank|sat\.gob|declaraguate|bi\.com\.gt|banrural|baccredomatic|gyt|promerica|inbursa|paypal|stripe|sat|dokploy|hostinger|github|amazon|aws|cloudflare|cliente)/i;
+
+export const CRITICAL_KEYWORDS = /(?:cotizaci[oó]n|factura|cliente|contrato|devfest|evento|pago|urgente|reuni[oó]n|stand|presupuesto|propuesta|pedido|transferencia|confirmaci[oó]n|soporte|alerta|aviso|seguridad|cuenta|renovaci[oó]n|comprobante|recibo|proveedor|env[ií]o|entrega|acuerdo)/i;
+
+/**
+ * Filtro agéntico flexible para determinar si un correo es relevante o prioritario
+ * evitando que remitentes oficiales o correos legítimos caigan en agujeros negros.
+ * @param {Object} params
+ * @param {string} [params.from='']
+ * @param {string} [params.subject='']
+ * @param {string} [params.snippet='']
+ * @param {boolean} [params.hasUnsubscribe=false]
+ * @returns {boolean}
+ */
+export function isImportantEmail({ from = '', subject = '', snippet = '', hasUnsubscribe = false } = {}) {
+  // 1. Remitentes oficiales o institucionales
+  if (OFFICIAL_OR_CRITICAL_SENDERS.test(from)) {
+    if (!/newsletter|promo@|ofertas@|deals@/i.test(from) || CRITICAL_KEYWORDS.test(subject)) {
+      return true;
+    }
+  }
+
+  // 2. Palabras clave de negocio, contratos, pagos, urgencias
+  if (CRITICAL_KEYWORDS.test(subject) || CRITICAL_KEYWORDS.test(snippet) || CRITICAL_KEYWORDS.test(from)) {
+    return true;
+  }
+
+  // 3. Si no es ruido publicitario ni spam, se considera legítimo
+  if (!isPromotionalOrNoise({ from, subject, snippet, hasUnsubscribe })) {
+    return true;
+  }
+
+  return false;
+}
+
 export function extractBodyFromPayload(payload) {
   if (!payload) return '';
   let textPlain = '';

@@ -195,6 +195,130 @@ export class ExecutiveBriefingService {
   }
 
   /**
+   * Genera el Midday Briefing (01:00 PM Guatemala) con balance matutino, tareas de la tarde y radar Gmail.
+   * @param {{ date?: Date }} [opts]
+   * @returns {Promise<{ text: string, data: Record<string, unknown> }>}
+   */
+  async buildMiddayBriefing({ date = new Date() } = {}) {
+    let unreadEmails = [];
+    try {
+      if (this.gmailService?.getUnreadInboxMessages) {
+        unreadEmails = await this.gmailService.getUnreadInboxMessages({ maxResults: 5, onlyImportant: true });
+      } else if (this.gmailService?.getInboxSummary) {
+        const summary = await this.gmailService.getInboxSummary({ maxResults: 5 });
+        unreadEmails = summary?.messages || [];
+      }
+    } catch (err) {
+      console.warn('[ExecutiveBriefing] Error consultando Gmail en midday briefing:', err.message);
+    }
+
+    let pendingTasks = [];
+    let completedToday = [];
+    try {
+      if (this.taskService?.listTasks) {
+        pendingTasks = await this.taskService.listTasks({ onlyPending: true, limit: 5 });
+        const allCompleted = await this.taskService.listTasks({ status: 'COMPLETADA', limit: 10 });
+        const todayIso = date.toISOString().slice(0, 10);
+        completedToday = allCompleted.filter((t) => t.completedAt && new Date(t.completedAt).toISOString().slice(0, 10) === todayIso);
+      }
+    } catch (err) {
+      console.warn('[ExecutiveBriefing] Error consultando tareas en midday briefing:', err.message);
+    }
+
+    let todayEvents = [];
+    let afternoonEvents = [];
+    try {
+      if (this.calendarService?.getTodayEvents) {
+        todayEvents = await this.calendarService.getTodayEvents({ timeZone: 'America/Guatemala' });
+        const currentMs = date.getTime();
+        afternoonEvents = todayEvents.filter((ev) => {
+          if (ev.isAllDay) return true;
+          if (!ev.start) return false;
+          const sTime = new Date(ev.start).getTime();
+          return !isNaN(sTime) && (sTime >= currentMs - 30 * 60 * 1000);
+        });
+      }
+    } catch (err) {
+      console.warn('[ExecutiveBriefing] Error consultando eventos en midday briefing:', err.message);
+    }
+
+    const emailSection = unreadEmails.length === 0
+      ? '✉️ <b>Bandeja limpia:</b> Sin fuegos pendientes en Gmail.'
+      : `✉️ <b>Correos de la mañana a tener en cuenta (${unreadEmails.length}):</b>\n` +
+        unreadEmails.map((m) => {
+          const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+          const snippetClean = m.snippet ? ` - ${m.snippet.slice(0, 80).replace(/\n/g, ' ')}...` : '';
+          return `• <b>${fromClean}:</b> ${m.subject}${snippetClean}`;
+        }).join('\n');
+
+    const tasksBalance = completedToday.length > 0
+      ? `✅ <b>Avance matutino:</b> ${completedToday.length} tarea(s) completada(s) hoy.\n\n`
+      : '';
+
+    const pendingFormatted = pendingTasks.length === 0
+      ? '• Sin tareas prioritarias pendientes para la tarde.'
+      : pendingTasks.map((t) => `• <b>${t.description}</b> [${t.priority || 'MEDIA'}]`).join('\n');
+
+    const taskSection = `${tasksBalance}📋 <b>Foco operativo para la tarde:</b>\n${pendingFormatted}`;
+
+    const eventsFormatted = afternoonEvents.length === 0
+      ? '📅 <b>Agenda despejada:</b> Sin citas pendientes para la tarde.'
+      : `📅 <b>Citas restantes del día (${afternoonEvents.length}):</b>\n` +
+        afternoonEvents.map((ev) => {
+          let time = '';
+          if (ev.start) {
+            const d = new Date(ev.start);
+            time = !isNaN(d.getTime())
+              ? d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Guatemala' })
+              : ev.start;
+          }
+          return `• ${time ? `${time} - ` : ''}<b>${ev.summary}</b>${ev.location ? ` (${ev.location})` : ''}`;
+        }).join('\n');
+
+    let message = [
+      '☕ <b>¡Jefecito lindo, check-in de mitad de jornada!</b>',
+      '',
+      'Espero que esa mañana haya sido muy productiva. Aquí tienes el balance ejecutivo de las 01:00 PM:',
+      '',
+      emailSection,
+      '',
+      taskSection,
+      '',
+      eventsFormatted,
+      '',
+      'Aprovecha a almorzar tranquilo. ¿Deseas que prepare algo de la agenda o apunte algún pendiente fresco?',
+    ].join('\n');
+
+    const aiClient = this.ai || this.brain?.ai;
+    if (aiClient?.models?.generateContent) {
+      try {
+        const prompt = `Eres Carmencita, la secretaria ejecutiva de Sebastián Jiménez. Redacta el Midday Briefing (Check-in de Mediodía) de las 01:00 PM con zalamería reactiva, calidez ejecutiva y aire visual.\nDatos:\n- Correos:\n${emailSection}\n- Tareas:\n${taskSection}\n- Citas tarde:\n${eventsFormatted}\n\nDirectivas: Saludo afectuoso y dinámico, balance de mitad de jornada, foco de la tarde, párrafos cortos con doble salto (\\n\\n), HTML limpio (<b>, <i>). CERO asteriscos.`;
+        const res = await aiClient.models.generateContent({
+          model: config.ai.modelName,
+          contents: prompt,
+          config: { temperature: 0.6 },
+        });
+        const aiText = typeof res?.text === 'function' ? res.text() : (res?.text || '');
+        if (aiText && aiText.trim().length > 20) {
+          message = sanitizeReplyText(aiText.trim());
+        }
+      } catch (aiErr) {
+        console.warn('[ExecutiveBriefing] Falló síntesis de midday brief con IA, usando fallback:', aiErr.message);
+      }
+    }
+
+    return {
+      text: sanitizeReplyText(message),
+      data: {
+        unreadEmails,
+        pendingTasks,
+        completedToday,
+        afternoonEvents,
+      },
+    };
+  }
+
+  /**
    * Genera el End-of-Day Wrap-Up (07:00 PM Guatemala) con balance y vista del día siguiente.
    * @param {{ date?: Date }} [opts]
    * @returns {Promise<{ text: string, data: Record<string, unknown> }>}

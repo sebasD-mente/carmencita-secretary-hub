@@ -71,16 +71,33 @@ model Invoice {
 
 // 4. Agenda y Tareas
 model Task {
-  id          String     @id @default(uuid())
-  description String     @db.Text
-  dueDate     DateTime?
-  priority    Priority   @default(MEDIA)
-  status      TaskStatus @default(PENDIENTE)
-  createdAt   DateTime   @default(now())
-  completedAt DateTime?
-  notifiedAt  DateTime?
+  id            String     @id @default(uuid())
+  description   String     @db.Text
+  dueDate       DateTime?
+  priority      Priority   @default(MEDIA)
+  status        TaskStatus @default(PENDIENTE)
+  isRecurring   Boolean    @default(false)
+  intervalHours Int?       // Intervalo en horas (ej: 2)
+  lastNotifiedAt DateTime?
+  executionCount Int       @default(0)
+  createdAt     DateTime   @default(now())
+  completedAt   DateTime?
+  notifiedAt    DateTime?
 
   @@index([status, dueDate])
+  @@index([isRecurring, status])
+}
+
+// 4b. Registro Persistente de Correos Notificados (Radar Gmail)
+model NotifiedEmail {
+  id         String   @id @default(uuid())
+  emailId    String   @unique
+  sender     String
+  subject    String   @db.Text
+  notifiedAt DateTime @default(now())
+
+  @@index([emailId])
+  @@index([notifiedAt])
 }
 
 enum TaskStatus {

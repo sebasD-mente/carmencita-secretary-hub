@@ -2,6 +2,7 @@ import { prisma as defaultPrisma } from '../core/prisma.js';
 import { config } from '../config.js';
 import { sanitizeReplyText } from '../tools/index.js';
 import { ExecutiveBriefingService } from './executive-briefing.service.js';
+import { isImportantEmail } from './gmail.service.js';
 
 function getGuatemalaTimeParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -113,7 +114,14 @@ export class SchedulerService {
     const notifiedTasks = [];
     try {
       const dueTasks = await this.prisma.task.findMany({
-        where: { status: 'PENDIENTE', dueDate: { lte: referenceDate }, notifiedAt: null },
+        where: {
+          status: 'PENDIENTE',
+          dueDate: { lte: referenceDate },
+          OR: [
+            { notifiedAt: null },
+            { isRecurring: true },
+          ],
+        },
         orderBy: { dueDate: 'asc' },
       });
       if (!dueTasks || dueTasks.length === 0) return [];
@@ -122,8 +130,31 @@ export class SchedulerService {
       for (const task of dueTasks) {
         try {
           await this._notifyTask(task);
-          const updated = await this.prisma.task.update({ where: { id: task.id }, data: { notifiedAt: new Date() } });
-          notifiedTasks.push(updated);
+
+          if (task.isRecurring) {
+            const intervalHours = task.intervalHours || 2;
+            const nextDue = new Date(referenceDate.getTime() + intervalHours * 60 * 60 * 1000);
+            const updated = await this.prisma.task.update({
+              where: { id: task.id },
+              data: {
+                dueDate: nextDue,
+                lastNotifiedAt: new Date(),
+                executionCount: { increment: 1 },
+                notifiedAt: new Date(),
+              },
+            });
+            notifiedTasks.push(updated);
+          } else {
+            const updated = await this.prisma.task.update({
+              where: { id: task.id },
+              data: {
+                notifiedAt: new Date(),
+                lastNotifiedAt: new Date(),
+                executionCount: { increment: 1 },
+              },
+            });
+            notifiedTasks.push(updated);
+          }
         } catch (taskErr) {
           console.error(`[Scheduler] Error al notificar tarea ${task.id}:`, taskErr.message);
         }
@@ -236,12 +267,31 @@ export class SchedulerService {
       return [];
     }
 
-    const priorityRegex = /(?:cotizaci[oó]n|factura|cliente|contrato|devfest|evento|pago|urgente|reuni[oó]n|stand|presupuesto)/i;
     const notified = [];
 
     for (const m of messages) {
-      if (!m || !m.id || this.notifiedEmailIds.has(m.id)) continue;
-      const isPriority = priorityRegex.test(m.subject || '') || priorityRegex.test(m.from || '') || priorityRegex.test(m.snippet || '');
+      if (!m || !m.id) continue;
+
+      // 1. Verificación persistente contra PostgreSQL (Inmune a reinicios)
+      let alreadyNotified = false;
+      if (this.prisma?.notifiedEmail?.findUnique) {
+        try {
+          const record = await this.prisma.notifiedEmail.findUnique({
+            where: { emailId: m.id },
+          });
+          if (record) alreadyNotified = true;
+        } catch (dbErr) {
+          console.warn('[Scheduler] Error consultando NotifiedEmail en DB:', dbErr.message);
+        }
+      }
+
+      if (alreadyNotified || this.notifiedEmailIds?.has(m.id)) continue;
+
+      const isPriority = isImportantEmail({
+        from: m.from || '',
+        subject: m.subject || '',
+        snippet: m.snippet || '',
+      });
 
       if (isPriority) {
         const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
@@ -249,7 +299,22 @@ export class SchedulerService {
         const msg = `✉️ <b>¡Jefecito, acaba de entrar un correo importante!</b>\n\n👤 <b>De:</b> ${fromClean}\n📌 <i>${m.subject || '(Sin asunto)'}</i>\n${snippetClean}\n\n¿Quieres que prepare una respuesta o lo revisamos más tarde?`;
 
         await this._dispatchTelegram(msg);
-        this.notifiedEmailIds.add(m.id);
+
+        // Registro soberano en PostgreSQL
+        if (this.prisma?.notifiedEmail?.create) {
+          await this.prisma.notifiedEmail.create({
+            data: {
+              emailId: m.id,
+              sender: fromClean,
+              subject: m.subject || '(Sin Asunto)',
+              notifiedAt: new Date(),
+            },
+          }).catch((err) => console.warn('[Scheduler] Error registrando notifiedEmail:', err.message));
+        }
+
+        if (this.notifiedEmailIds?.add) {
+          this.notifiedEmailIds.add(m.id);
+        }
         notified.push({ email: m, message: msg });
       }
     }
@@ -258,26 +323,23 @@ export class SchedulerService {
     return notified;
   }
 
-  // ----------------- RUTINA 4: CHECK-IN DE MEDIODÍA -----------------
+  // ----------------- RUTINA 4: CHECK-IN DE MEDIODÍA (24/7/365) -----------------
   async checkMiddaySync(referenceDate = new Date()) {
-    const { todayStr, hour, minute, weekday } = getGuatemalaTimeParts(referenceDate);
-    const isWeekend = ['sat', 'sun', 'sáb', 'dom'].some((d) => weekday.toLowerCase().startsWith(d));
-    if (isWeekend) return null;
+    const { todayStr, hour, minute } = getGuatemalaTimeParts(referenceDate);
 
-    if (hour === 13 && minute <= 5 && this.lastMiddayDate !== todayStr) {
-      const msg = '☕ <b>¡Jefe lindo, mitad del día superada!</b>\n\nEspero que esa mañana haya sido muy productiva. Aprovecha a almorzar tranquilo.\n\n¿Se te ocurrió alguna idea de diseño o tienes algún pendiente fresco que quieras que te apunte antes de que se te escape de la mente?';
-      await this._dispatchTelegram(msg);
+    if (hour === 13 && minute <= 10 && this.lastMiddayDate !== todayStr) {
+      this._syncBriefingService();
+      const middayBrief = await this.executiveBriefingService.buildMiddayBriefing({ date: referenceDate });
+      await this._dispatchTelegram(middayBrief.text);
       this.lastMiddayDate = todayStr;
-      return msg;
+      return middayBrief.text;
     }
     return null;
   }
 
-  // ----------------- RUTINA 5: DEBRIEFING CIERRE DE JORNADA -----------------
+  // ----------------- RUTINA 5: DEBRIEFING CIERRE DE JORNADA (24/7/365) -----------------
   async checkEveningDebrief(referenceDate = new Date()) {
-    const { todayStr, hour, minute, weekday } = getGuatemalaTimeParts(referenceDate);
-    const isWeekend = ['sat', 'sun', 'sáb', 'dom'].some((d) => weekday.toLowerCase().startsWith(d));
-    if (isWeekend) return null;
+    const { todayStr, hour, minute } = getGuatemalaTimeParts(referenceDate);
 
     const isEveningWindow = (hour === 18 && minute >= 30 && minute <= 35) || (hour === 19 && minute <= 5);
     if (isEveningWindow && this.lastEveningDate !== todayStr) {
