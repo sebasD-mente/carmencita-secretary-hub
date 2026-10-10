@@ -1,9 +1,10 @@
 import { validateToolArgs } from './schemas/index.js';
 import { DriveToolSchema, handleDriveAction } from './drive.tools.js';
+import { GenerateImageActionSchema } from '../validators/actions.schema.js';
 
 /**
  * Despachador Tipado y Segregador de Herramientas para el Motor Agéntico de Carmencita.
- * Implementa validación Zod, Circuit Breakers con AbortController (8s),
+ * Implementa validación Zod, Circuit Breakers con AbortController (8s / 25s media),
  * segregación READ vs. MUTATE (Staged Actions) y contratos tipados normalizados.
  */
 export class ToolDispatcher {
@@ -26,6 +27,9 @@ export class ToolDispatcher {
     let validation;
     if (toolName === 'manage_drive' || toolName === 'DELETE_DRIVE_FILE') {
       const parsed = DriveToolSchema.safeParse(rawArgs);
+      validation = parsed.success ? { valid: true, data: parsed.data } : { valid: false, error: parsed.error.format() };
+    } else if (toolName === 'generate_image') {
+      const parsed = GenerateImageActionSchema.safeParse(rawArgs);
       validation = parsed.success ? { valid: true, data: parsed.data } : { valid: false, error: parsed.error.format() };
     } else {
       validation = validateToolArgs(toolName, rawArgs);
@@ -68,14 +72,15 @@ export class ToolDispatcher {
     let timer = null;
 
     try {
+      const timeoutLimit = toolName === 'generate_image' ? Math.max(this.toolTimeoutMs, 25000) : this.toolTimeoutMs;
       const timeoutPromise = new Promise((resolve) => {
         timer = setTimeout(() => {
           controller.abort();
           resolve({
             success: false,
-            error: { code: 'TOOL_TIMEOUT', message: 'La herramienta excedió el tiempo límite de ejecución (8s). Degrada elegantemente o informa al usuario.' },
+            error: { code: 'TOOL_TIMEOUT', message: 'La herramienta excedió el tiempo límite de ejecución.' },
           });
-        }, this.toolTimeoutMs);
+        }, timeoutLimit);
       });
 
       const executionPromise = this._invokeService(toolName, args, { ...context, signal: controller.signal });
@@ -114,6 +119,8 @@ export class ToolDispatcher {
           return await this._handleDiagnostics(args, context);
         case 'generate_media':
           return await this._handleMedia(args, context);
+        case 'generate_image':
+          return await this._handleImage(args, context);
         default:
           return { success: false, error: { code: 'UNKNOWN_TOOL', message: `No existe un controlador registrado para la herramienta: ${toolName}` } };
       }
@@ -241,5 +248,21 @@ export class ToolDispatcher {
       return { success: true, data: { avatar } };
     }
     throw new Error(`Tipo de medio no soportado: ${type}`);
+  }
+
+  async _handleImage(args, context = {}) {
+    const service = this.deps.imageGenerationService;
+    if (!service) throw new Error('Servicio de Generación de Imágenes no disponible.');
+    const result = await service.generateImage({
+      prompt: args.prompt,
+      aspectRatio: args.aspectRatio,
+      mode: args.mode,
+      style: args.style,
+      signal: context.signal,
+    });
+    if (result?.isSafetyBlock) {
+      return { success: false, isSafetyBlock: true, reason: result.reason || 'SAFETY_FILTER_TRIGGERED', data: result };
+    }
+    return { success: true, data: result };
   }
 }

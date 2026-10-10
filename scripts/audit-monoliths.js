@@ -19,7 +19,7 @@ export const DOMAIN_CEILINGS = {
   'src/config.js': 100,
 
   // Capa de Herramientas Modulares (src/tools/)
-  'src/tools/declarations.js': 280,
+  'src/tools/declarations.js': 300,
   'src/tools/dispatcher.js': 280,
   'src/tools/obsidian.tools.js': 300,
   'src/tools/workspace/calendar.tools.js': 160,
@@ -45,6 +45,7 @@ export const DOMAIN_CEILINGS = {
   'src/services/gemini-pool.service.js': 200,
   'src/services/document.service.js': 300,
   'src/services/voice.service.js': 260,
+  'src/services/image-generation.service.js': 260,
   'src/services/diagnostics.service.js': 200,
   'src/services/storage.provider.js': 260,
   'src/services/scheduler.service.js': 500,

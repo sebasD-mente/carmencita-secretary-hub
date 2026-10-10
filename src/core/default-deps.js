@@ -13,6 +13,7 @@ import { defaultGmailService } from '../services/gmail.service.js';
 import { defaultVoiceService } from '../services/voice.service.js';
 import { defaultMediaService } from '../services/media.service.js';
 import { defaultDiagnosticsService } from '../services/diagnostics.service.js';
+import { defaultImageGenerationService } from '../services/image-generation.service.js';
 
 /**
  * Resuelve y vincula las dependencias por omisión del Carmencita Hub.
@@ -34,5 +35,6 @@ export function resolveDefaultDeps(deps = {}) {
     voiceService: deps?.voiceService !== undefined ? deps.voiceService : defaultVoiceService,
     mediaService: deps?.mediaService !== undefined ? deps.mediaService : defaultMediaService,
     diagnosticsService: deps?.diagnosticsService !== undefined ? deps.diagnosticsService : defaultDiagnosticsService,
+    imageGenerationService: deps?.imageGenerationService || defaultImageGenerationService,
   };
 }

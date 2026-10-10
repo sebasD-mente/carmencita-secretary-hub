@@ -259,4 +259,28 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
       required: ['type'],
     },
   },
+  {
+    name: 'generate_image',
+    description: 'Genera imágenes fotorrealistas, bocetos de stands para ferias (Deco Vintage), rótulos comerciales (Midas) y arte visual con el motor Nano Banana de Gemini.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        prompt: {
+          type: Type.STRING,
+          description: 'Descripción de la escena o diseño visual a generar.',
+        },
+        aspectRatio: {
+          type: Type.STRING,
+          enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
+          description: 'Relación de aspecto deseada.',
+        },
+        mode: {
+          type: Type.STRING,
+          enum: ['boceto', 'arte_final'],
+          description: 'boceto para lluvia de ideas rápida; arte_final para máxima fidelidad.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
 ];

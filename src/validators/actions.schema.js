@@ -265,6 +265,18 @@ export const DiagnoseSystemActionSchema = z.object({
   scope: z.enum(['full', 'errors', 'services', 'pm2']).optional().default('full'),
 });
 
+export const AspectRatioSchema = z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).default('1:1');
+export const ImageModeSchema = z.enum(['boceto', 'arte_final']).default('arte_final');
+
+export const GenerateImageActionSchema = z.object({
+  action: z.literal('GENERATE_IMAGE').default('GENERATE_IMAGE'),
+  prompt: z.string().min(5, 'El prompt visual debe tener al menos 5 caracteres'),
+  expandedPrompt: z.string().optional(),
+  aspectRatio: AspectRatioSchema,
+  mode: ImageModeSchema,
+  style: z.string().optional(),
+});
+
 export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   RunAgyTaskActionSchema,
   GenerateExcelActionSchema,
@@ -292,6 +304,7 @@ export const AnyCarmencitaActionSchema = z.discriminatedUnion('action', [
   SyncObsidianVaultActionSchema,
   UpdateObsidianNoteActionSchema,
   DiagnoseSystemActionSchema,
+  GenerateImageActionSchema,
 ]);
 
 export function parseCarmencitaAction(rawJson) {
