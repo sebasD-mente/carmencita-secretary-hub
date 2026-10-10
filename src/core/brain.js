@@ -49,6 +49,8 @@ export class CarmencitaBrain {
       gmailService: this.gmailService, voiceService: this.voiceService, mediaService: this.mediaService,
       diagnosticsService: this.diagnosticsService, agyBridge: this.agyBridge, ai: this.ai, brain: this,
       storage: this.storage, synthesizeToolResults: (opts) => this._synthesizeToolResults(opts),
+      imageGenerationService: this.imageGenerationService,
+      emailTriageService: this.emailTriageService,
       ...this._deps,
     };
   }

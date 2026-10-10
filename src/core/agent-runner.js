@@ -281,6 +281,16 @@ export function mapToolSummaryToActionResult(runnerResult) {
       if (data?.excelFile) { opts.hasExcel = true; opts.excelFile = data.excelFile; }
       if (data?.avatar) { opts.hasPhoto = true; opts.photoFile = data.avatar; }
       opts.actionData = { action: 'GENERATE_MEDIA', ...(data || {}) };
+    } else if (name === 'generate_image') {
+      if (data?.buffer) {
+        opts.hasPhoto = true;
+        opts.photoFile = {
+          buffer: data.buffer,
+          fileName: data.fileName || 'nano_generated.png',
+          caption: runnerResult.reply,
+        };
+      }
+      opts.actionData = { action: 'GENERATE_IMAGE', ...(data || {}) };
     }
   }
   return makeActionResult(opts);

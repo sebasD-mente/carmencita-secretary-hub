@@ -10,6 +10,8 @@ import {
   TimeoutError,
 } from '../src/services/image-generation.service.js';
 import { ToolDispatcher } from '../src/tools/dispatcher.js';
+import { CarmencitaBrain } from '../src/core/brain.js';
+import { mapToolSummaryToActionResult } from '../src/core/agent-runner.js';
 
 test('🧠 Suite Coercitiva: Motor de Generación Visual Nano Banana Pro [DEKO-CARMEN-046]', async (t) => {
 
@@ -55,12 +57,14 @@ test('🧠 Suite Coercitiva: Motor de Generación Visual Nano Banana Pro [DEKO-C
   await t.test('2. ImageGenerationService procesa una generación mockeada con dirección de arte y subida a GCS', async () => {
     const fakeImageBase64 = Buffer.from('fake-pixel-data-nano-banana').toString('base64');
     let capturedModel = null;
+    let capturedConfig = null;
     let savedToGcs = false;
 
     const mockAi = {
       models: {
-        generateContent: async ({ model, contents }) => {
+        generateContent: async ({ model, contents, config }) => {
           capturedModel = model;
+          capturedConfig = config;
           return {
             candidates: [
               {
@@ -112,6 +116,7 @@ test('🧠 Suite Coercitiva: Motor de Generación Visual Nano Banana Pro [DEKO-C
 
     assert.equal(result.success, true);
     assert.equal(capturedModel, PRO_MODELS[0]);
+    assert.deepEqual(capturedConfig, { responseModalities: ['IMAGE'] });
     assert.ok(result.buffer instanceof Buffer);
     assert.equal(result.mimeType, 'image/png');
     assert.equal(savedToGcs, true);
@@ -300,4 +305,49 @@ test('🧠 Suite Coercitiva: Motor de Generación Visual Nano Banana Pro [DEKO-C
     assert.equal(invalidResult.reason, 'INVALID_ARGUMENTS');
   });
 
+  await t.test('6. [DEKO-CARMEN-046.1] CarmencitaBrain expone imageGenerationService y emailTriageService en get deps()', () => {
+    const fakeImageGen = { name: 'fake-image-gen-service' };
+    const fakeEmailTriage = { name: 'fake-email-triage-service' };
+
+    const brain = new CarmencitaBrain({
+      imageGenerationService: fakeImageGen,
+      emailTriageService: fakeEmailTriage,
+    });
+
+    assert.equal(brain.deps.imageGenerationService, fakeImageGen);
+    assert.equal(brain.deps.emailTriageService, fakeEmailTriage);
+    assert.ok(brain.toolDispatcher, 'ToolDispatcher debe haberse inicializado con las dependencias');
+  });
+
+  await t.test('7. [DEKO-CARMEN-046.1] mapToolSummaryToActionResult mapea generate_image activando opts.hasPhoto para Telegram', () => {
+    const fakeBuffer = Buffer.from('png-bytes-test');
+    const runnerResult = {
+      reply: 'Aquí tienes el diseño de tu stand.',
+      toolCallsSummary: [
+        {
+          name: 'generate_image',
+          args: { prompt: 'Stand de feria' },
+          result: {
+            data: {
+              buffer: fakeBuffer,
+              fileName: 'nano_stand.png',
+              cloudUrl: 'https://storage.googleapis.com/test/nano_stand.png',
+            },
+          },
+        },
+      ],
+    };
+
+    const actionResult = mapToolSummaryToActionResult(runnerResult);
+
+    assert.equal(actionResult.hasPhoto, true);
+    assert.ok(actionResult.photoFile);
+    assert.equal(actionResult.photoFile.buffer, fakeBuffer);
+    assert.equal(actionResult.photoFile.fileName, 'nano_stand.png');
+    assert.equal(actionResult.photoFile.caption, 'Aquí tienes el diseño de tu stand.');
+    assert.equal(actionResult.actionData.action, 'GENERATE_IMAGE');
+    assert.equal(actionResult.actionData.cloudUrl, 'https://storage.googleapis.com/test/nano_stand.png');
+  });
+
 });
+

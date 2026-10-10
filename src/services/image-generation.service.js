@@ -152,7 +152,7 @@ export class ImageGenerationService {
               return await client.models.generateContent({
                 model: modelName,
                 contents: [{ role: 'user', parts: [{ text: expandedPrompt }] }],
-                config: { responseMimeType: 'image/png' },
+                config: { responseModalities: ['IMAGE'] },
               });
             }
             if (client.models?.generateImages) {
