@@ -20,9 +20,13 @@ export const DOMAIN_CEILINGS = {
 
   // Capa de Herramientas Modulares (src/tools/)
   'src/tools/declarations.js': 280,
-  'src/tools/dispatcher.js': 360,
+  'src/tools/dispatcher.js': 280,
   'src/tools/obsidian.tools.js': 300,
-  'src/tools/workspace.tools.js': 420,
+  'src/tools/workspace/calendar.tools.js': 160,
+  'src/tools/workspace/gmail.tools.js': 130,
+  'src/tools/workspace/tasks.tools.js': 120,
+  'src/tools/workspace/contacts.tools.js': 120,
+  'src/tools/workspace.tools.js': 90,
   'src/tools/system.tools.js': 200,
   'src/tools/media.tools.js': 220,
   'src/tools/documents.tools.js': 220,

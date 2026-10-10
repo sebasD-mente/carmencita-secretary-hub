@@ -198,15 +198,39 @@ export class CarmencitaBrain {
     try {
       let directivesBlock = '';
       let memoriesBlock = '';
+      const tasks = [];
+
+      // 1. Directivas Cardinales Activas
       if (typeof this.embeddingService.getActiveDirectives === 'function') {
-        const active = await this.embeddingService.getActiveDirectives({ limit: 10 });
-        if (active?.length) directivesBlock = `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${active.map((d) => `- ${d.content}`).join('\n')}\n`;
-      } else if (typeof this.embeddingService.searchSimilarMemories === 'function') {
-        const mems = await this.embeddingService.searchSimilarMemories(queryText, { limit: 3, excludeCategory: 'OBSIDIAN' });
-        if (mems?.length) memoriesBlock = `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${mems.map((m) => `• [${m.category}] ${m.content} (Afinidad: ${(m.similarity * 100).toFixed(0)}%)`).join('\n')}\n`;
+        tasks.push(
+          this.embeddingService.getActiveDirectives({ limit: 10 })
+            .then((active) => {
+              if (active?.length) {
+                directivesBlock = `\n### 📌 DIRECTIVAS CARDINALES ACTIVAS DE SEBASTIÁN:\n${active.map((d) => `- ${d.content}`).join('\n')}\n`;
+              }
+            })
+            .catch(() => {})
+        );
       }
+
+      // 2. Búsqueda Vectorial Semántica por Afinidad Coseno (excluyendo chunks crudos de OBSIDIAN)
+      if (typeof this.embeddingService.searchSimilarMemories === 'function' && queryText && queryText.trim()) {
+        tasks.push(
+          this.embeddingService.searchSimilarMemories(queryText, { limit: 3, excludeCategory: 'OBSIDIAN', minSimilarity: 0.55 })
+            .then((mems) => {
+              if (mems?.length) {
+                memoriesBlock = `\n🧠 RECUERDOS HISTÓRICOS Y DIRECTIVAS DE SEBASTIÁN RECUPERADOS (RAG):\n${mems.map((m) => `• [${m.category}] ${m.content}${m.similarity !== undefined ? ` (Afinidad: ${(m.similarity * 100).toFixed(0)}%)` : ''}`).join('\n')}\n`;
+              }
+            })
+            .catch(() => {})
+        );
+      }
+
+      await Promise.all(tasks);
       return { directivesBlock, memoriesBlock };
-    } catch { return { directivesBlock: '', memoriesBlock: '' }; }
+    } catch {
+      return { directivesBlock: '', memoriesBlock: '' };
+    }
   }
 
   _getGuatemalaTimestamps() {
