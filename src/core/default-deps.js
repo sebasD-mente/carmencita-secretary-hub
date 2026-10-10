@@ -14,6 +14,7 @@ import { defaultVoiceService } from '../services/voice.service.js';
 import { defaultMediaService } from '../services/media.service.js';
 import { defaultDiagnosticsService } from '../services/diagnostics.service.js';
 import { defaultImageGenerationService } from '../services/image-generation.service.js';
+import { defaultEmailTriageService } from '../services/email-triage.service.js';
 
 /**
  * Resuelve y vincula las dependencias por omisión del Carmencita Hub.
@@ -32,6 +33,7 @@ export function resolveDefaultDeps(deps = {}) {
     obsidianService: deps?.obsidianService !== undefined ? deps.obsidianService : defaultObsidianDriveService,
     googleDriveService: deps?.googleDriveService !== undefined ? deps.googleDriveService : defaultGoogleDriveService,
     gmailService: deps?.gmailService !== undefined ? deps.gmailService : defaultGmailService,
+    emailTriageService: deps?.emailTriageService !== undefined ? deps.emailTriageService : defaultEmailTriageService,
     voiceService: deps?.voiceService !== undefined ? deps.voiceService : defaultVoiceService,
     mediaService: deps?.mediaService !== undefined ? deps.mediaService : defaultMediaService,
     diagnosticsService: deps?.diagnosticsService !== undefined ? deps.diagnosticsService : defaultDiagnosticsService,

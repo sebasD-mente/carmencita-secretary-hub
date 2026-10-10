@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 
-export const DEFAULT_GMAIL_QUERY = 'is:unread label:INBOX category:primary -category:social -category:promotions -category:forums';
+export const DEFAULT_GMAIL_QUERY = 'is:unread label:INBOX -category:social -category:promotions -category:forums';
 
 /**
  * Determina si un correo es publicidad, red social, boletín masivo o spam
@@ -369,6 +369,67 @@ export class GmailService {
     return {
       totalUnread: messages.length,
       messages,
+    };
+  }
+
+  /**
+   * Envía un correo electrónico a través de Gmail API v1 [DEKO-CARMEN-047]
+   * @param {Object} options
+   * @param {string} options.to
+   * @param {string} options.subject
+   * @param {string} [options.bodyText='']
+   * @param {string} [options.bodyHtml='']
+   * @returns {Promise<{ success: boolean, messageId: string }>}
+   */
+  async sendEmail({ to, subject, bodyText = '', bodyHtml = '' } = {}) {
+    if (!to || typeof to !== 'string' || !to.trim()) {
+      throw new Error('El parámetro "to" es obligatorio para enviar un correo.');
+    }
+    if (!subject || typeof subject !== 'string' || !subject.trim()) {
+      throw new Error('El parámetro "subject" es obligatorio para enviar un correo.');
+    }
+
+    let finalSubject = subject.trim();
+    const isToSebastian = /sebasjimenez0330(?:[+]carmencita)?@gmail\.com/i.test(to);
+    if (isToSebastian && !/^carmencita comunica:/i.test(finalSubject)) {
+      finalSubject = `Carmencita Comunica: ${finalSubject}`;
+    }
+
+    const utf8Subject = `=?utf-8?B?${Buffer.from(finalSubject, 'utf-8').toString('base64')}?=`;
+    const messageParts = [
+      `To: ${to.trim()}`,
+      `Subject: ${utf8Subject}`,
+      'MIME-Version: 1.0',
+    ];
+
+    if (bodyHtml) {
+      messageParts.push('Content-Type: text/html; charset=utf-8');
+      messageParts.push('Content-Transfer-Encoding: base64\r\n');
+      messageParts.push(Buffer.from(bodyHtml, 'utf-8').toString('base64'));
+    } else {
+      messageParts.push('Content-Type: text/plain; charset=utf-8');
+      messageParts.push('Content-Transfer-Encoding: base64\r\n');
+      messageParts.push(Buffer.from(bodyText || '', 'utf-8').toString('base64'));
+    }
+
+    const rawMessage = messageParts.join('\r\n');
+    const encoded = Buffer.from(rawMessage, 'utf-8').toString('base64url');
+
+    const gmail = await this._getGmailClient();
+    if (!gmail) {
+      throw new Error('Gmail API no configurado o sin credenciales válidas.');
+    }
+
+    const res = await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encoded,
+      },
+    });
+
+    return {
+      success: true,
+      messageId: res.data?.id || 'sent',
     };
   }
 }

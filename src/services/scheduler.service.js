@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { sanitizeReplyText } from '../tools/index.js';
 import { ExecutiveBriefingService } from './executive-briefing.service.js';
 import { isImportantEmail } from './gmail.service.js';
+import { defaultEmailTriageService, EmailCategory, EmailUrgency } from './email-triage.service.js';
 
 function getGuatemalaTimeParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -33,6 +34,7 @@ export class SchedulerService {
     this.calendarService = opts.calendarService || null;
     this.taskService = opts.taskService || null;
     this.gmailService = opts.gmailService || null;
+    this.emailTriageService = opts.emailTriageService || defaultEmailTriageService;
     this.weatherFetcher = opts.weatherFetcher || null;
     this.intervalMs = opts.intervalMs || 60000;
     this.lastBriefDate = opts.lastBriefDate || null;
@@ -245,21 +247,22 @@ export class SchedulerService {
     return alertsDispatched;
   }
 
-  // ----------------- RUTINA 3: RADAR DE BANDEJA GMAIL -----------------
+  // ----------------- RUTINA 3: RADAR DE BANDEJA GMAIL [DEKO-CARMEN-047] -----------------
   async checkInboxWatchdog(referenceDate = new Date(), force = false) {
     if (!this.gmailService) return [];
     const { hour } = getGuatemalaTimeParts(referenceDate);
     if (!force && (hour < 8 || hour >= 20)) return [];
 
     const nowMs = referenceDate.getTime();
-    if (!force && (nowMs - this.lastInboxCheckTime < 60 * 60 * 1000)) return [];
+    const THROTTLE_MS = 5 * 60 * 1000;
+    if (!force && (nowMs - this.lastInboxCheckTime < THROTTLE_MS)) return [];
 
     let messages = [];
     try {
       if (typeof this.gmailService.getUnreadInboxMessages === 'function') {
-        messages = await this.gmailService.getUnreadInboxMessages({ maxResults: 5, onlyImportant: true });
+        messages = await this.gmailService.getUnreadInboxMessages({ maxResults: 10, onlyImportant: false });
       } else if (typeof this.gmailService.getInboxSummary === 'function') {
-        const summary = await this.gmailService.getInboxSummary({ maxResults: 5 });
+        const summary = await this.gmailService.getInboxSummary({ maxResults: 10 });
         messages = summary?.messages || [];
       }
     } catch (err) {
@@ -268,17 +271,15 @@ export class SchedulerService {
     }
 
     const notified = [];
+    const priorityBatch = [];
 
     for (const m of messages) {
       if (!m || !m.id) continue;
 
-      // 1. Verificación persistente contra PostgreSQL (Inmune a reinicios)
       let alreadyNotified = false;
       if (this.prisma?.notifiedEmail?.findUnique) {
         try {
-          const record = await this.prisma.notifiedEmail.findUnique({
-            where: { emailId: m.id },
-          });
+          const record = await this.prisma.notifiedEmail.findUnique({ where: { emailId: m.id } });
           if (record) alreadyNotified = true;
         } catch (dbErr) {
           console.warn('[Scheduler] Error consultando NotifiedEmail en DB:', dbErr.message);
@@ -287,40 +288,136 @@ export class SchedulerService {
 
       if (alreadyNotified || this.notifiedEmailIds?.has(m.id)) continue;
 
-      const isPriority = isImportantEmail({
-        from: m.from || '',
-        subject: m.subject || '',
-        snippet: m.snippet || '',
-      });
+      let triageResult = null;
+      if (this.emailTriageService?.classifyEmail) {
+        try {
+          triageResult = await this.emailTriageService.classifyEmail({
+            from: m.from || '',
+            subject: m.subject || '',
+            snippet: m.snippet || '',
+            bodyText: m.bodyText || '',
+          });
+        } catch (triageErr) {
+          console.warn(`[Scheduler] Error en triaje cognitivo para correo ${m.id}:`, triageErr.message);
+        }
+      }
+
+      if (!triageResult) {
+        const legacyPrio = isImportantEmail({ from: m.from || '', subject: m.subject || '', snippet: m.snippet || '' });
+        triageResult = {
+          category: legacyPrio ? 'CLIENTE_NEGOCIO' : 'RUIDO',
+          urgency: legacyPrio ? 'ALTA' : 'RUIDO',
+          isActionable: legacyPrio,
+          oneLineSummary: m.subject || '',
+          executiveReason: legacyPrio ? 'Prioritario por filtro heurístico' : 'Ruido descartado',
+        };
+      }
+
+      // Canal Asíncrono de Emergencia de Sebastián
+      if (triageResult.category === EmailCategory.EMERGENCIA_SEBASTIAN || triageResult.category === 'EMERGENCIA_SEBASTIAN') {
+        let emailBody = m.bodyText || '';
+        if (!emailBody && typeof this.gmailService.getEmailDetails === 'function') {
+          try {
+            const details = await this.gmailService.getEmailDetails({ messageId: m.id });
+            emailBody = details?.bodyText || '';
+          } catch {}
+        }
+        if (!emailBody) emailBody = m.snippet || m.subject || '';
+
+        let agentReply = '';
+        if (this.brain?.processTextMessage) {
+          try {
+            const res = await this.brain.processTextMessage({ channel: 'email', senderId: 'sebasjimenez0330@gmail.com', senderName: 'Sebastián Jiménez', text: emailBody });
+            agentReply = typeof res === 'string' ? res : (res?.reply || res?.text || '');
+          } catch {
+            try {
+              const res = await this.brain.processTextMessage(emailBody);
+              agentReply = typeof res === 'string' ? res : (res?.reply || res?.text || '');
+            } catch {
+              agentReply = '¡Hola Sebastián! He recibido tu instrucción de emergencia por correo y estoy ejecutándola de inmediato.';
+            }
+          }
+        } else {
+          agentReply = '¡Hola Sebastián! He recibido tu instrucción de emergencia por correo.';
+        }
+
+        if (typeof this.gmailService.sendEmail === 'function') {
+          try {
+            await this.gmailService.sendEmail({ to: 'sebasjimenez0330@gmail.com', subject: `Carmencita Comunica: Re: ${m.subject || 'Directiva de Emergencia'}`, bodyText: agentReply });
+          } catch (sendErr) {
+            console.error('[Scheduler] Error enviando respuesta a correo de emergencia:', sendErr.message);
+          }
+        }
+
+        await this._recordNotifiedEmail(m, m.from || 'Sebastián Jiménez');
+        notified.push({ email: m, classification: triageResult, reply: agentReply, isEmergency: true });
+        continue;
+      }
+
+      const isPriority = triageResult.urgency === EmailUrgency.CRITICO ||
+                         triageResult.urgency === EmailUrgency.ALTA ||
+                         triageResult.urgency === 'CRITICO' ||
+                         triageResult.urgency === 'ALTA';
 
       if (isPriority) {
-        const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
-        const snippetClean = m.snippet ? m.snippet.slice(0, 120).replace(/\n/g, ' ') : '';
-        const msg = `✉️ <b>¡Jefecito, acaba de entrar un correo importante!</b>\n\n👤 <b>De:</b> ${fromClean}\n📌 <i>${m.subject || '(Sin asunto)'}</i>\n${snippetClean}\n\n¿Quieres que prepare una respuesta o lo revisamos más tarde?`;
+        priorityBatch.push({ email: m, classification: triageResult });
+      }
+    }
 
-        await this._dispatchTelegram(msg);
+    if (priorityBatch.length === 1) {
+      const item = priorityBatch[0];
+      const fromClean = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+      const snippetClean = item.email.snippet ? item.email.snippet.slice(0, 120).replace(/\n/g, ' ') : '';
+      const msg = `✉️ <b>¡Jefecito, acaba de entrar un correo importante!</b>\n\n👤 <b>De:</b> ${fromClean}\n📌 <i>${item.email.subject || '(Sin asunto)'}</i>\n${snippetClean}\n\n¿Quieres que prepare una respuesta o lo revisamos más tarde?`;
+      await this._dispatchTelegram(msg);
+      await this._recordNotifiedEmail(item.email, fromClean);
+      notified.push({ email: item.email, message: msg, classification: item.classification });
+    } else if (priorityBatch.length > 1) {
+      const lines = priorityBatch.map((item) => {
+        const cat = item.classification?.category;
+        const icon = (cat === 'INFRAESTRUCTURA' || cat === EmailCategory.INFRAESTRUCTURA) ? '🔴'
+          : (cat === 'FINANCIERO' || cat === EmailCategory.FINANCIERO) ? '🟢'
+          : (cat === 'CLIENTE_NEGOCIO' || cat === EmailCategory.CLIENTE_NEGOCIO) ? '💼'
+          : (cat === 'SUSCRIPCION' || cat === EmailCategory.SUSCRIPCION) ? '💳' : '📌';
+        const senderName = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+        const summary = item.classification?.oneLineSummary || item.email.subject || '(Sin Asunto)';
+        return `${icon} <b>${senderName}:</b> <i>${summary}</i>`;
+      });
 
-        // Registro soberano en PostgreSQL
-        if (this.prisma?.notifiedEmail?.create) {
-          await this.prisma.notifiedEmail.create({
-            data: {
-              emailId: m.id,
-              sender: fromClean,
-              subject: m.subject || '(Sin Asunto)',
-              notifiedAt: new Date(),
-            },
-          }).catch((err) => console.warn('[Scheduler] Error registrando notifiedEmail:', err.message));
-        }
+      const batchMsg = [
+        '✉️ <b>¡Sebas, novedades importantes en tu correo!</b>',
+        '',
+        ...lines,
+        '',
+        '¿Deseas que prepare alguna respuesta o gestione algo de inmediato?',
+      ].join('\n');
 
-        if (this.notifiedEmailIds?.add) {
-          this.notifiedEmailIds.add(m.id);
-        }
-        notified.push({ email: m, message: msg });
+      await this._dispatchTelegram(batchMsg);
+      for (const item of priorityBatch) {
+        const fromClean = item.email.from ? item.email.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+        await this._recordNotifiedEmail(item.email, fromClean);
+        notified.push({ email: item.email, message: batchMsg, classification: item.classification });
       }
     }
 
     this.lastInboxCheckTime = nowMs;
     return notified;
+  }
+
+  async _recordNotifiedEmail(email, senderName) {
+    if (this.prisma?.notifiedEmail?.create) {
+      await this.prisma.notifiedEmail.create({
+        data: {
+          emailId: email.id,
+          sender: senderName || 'Desconocido',
+          subject: email.subject || '(Sin Asunto)',
+          notifiedAt: new Date(),
+        },
+      }).catch((err) => console.warn('[Scheduler] Error registrando notifiedEmail:', err.message));
+    }
+    if (this.notifiedEmailIds?.add) {
+      this.notifiedEmailIds.add(email.id);
+    }
   }
 
   // ----------------- RUTINA 4: CHECK-IN DE MEDIODÍA (24/7/365) -----------------
