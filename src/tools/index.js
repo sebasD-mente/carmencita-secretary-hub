@@ -1,4 +1,5 @@
 import { handleObsidianAction } from './obsidian.tools.js';
+import { handleDriveAction } from './drive.tools.js';
 import { handleWorkspaceAction } from './workspace.tools.js';
 import { handleSystemAction } from './system.tools.js';
 import { handleMediaAction } from './media.tools.js';
@@ -123,6 +124,12 @@ const OBSIDIAN_ACTIONS = new Set([
   'APPEND_OBSIDIAN_NOTE', 'SEARCH_OBSIDIAN_NOTES', 'SYNC_OBSIDIAN_VAULT',
 ]);
 
+const DRIVE_ACTIONS = new Set([
+  'LIST_DRIVE_FILES', 'READ_DRIVE_FILE', 'CREATE_DRIVE_FILE',
+  'UPDATE_DRIVE_FILE', 'MOVE_DRIVE_FILE', 'DELETE_DRIVE_FILE',
+  'SEARCH_DRIVE_FILES',
+]);
+
 const WORKSPACE_ACTIONS = new Set([
   'CHECK_GMAIL', 'CREATE_CALENDAR_EVENT', 'LIST_CALENDAR_EVENTS',
   'RESCHEDULE_CALENDAR_EVENT', 'CANCEL_CALENDAR_EVENT', 'SAVE_TASK',
@@ -141,6 +148,15 @@ export async function executeAction(parsedAction, deps, context = {}) {
 
   let result = null;
   if (OBSIDIAN_ACTIONS.has(actionName)) result = await handleObsidianAction(parsedAction, deps, context);
+  else if (DRIVE_ACTIONS.has(actionName)) {
+    const driveService = deps?.googleDriveService || deps?.driveService;
+    const driveResult = await handleDriveAction(driveService, parsedAction);
+    result = makeActionResult({
+      reply: driveResult?.data ? JSON.stringify(driveResult.data) : (context?.cleanText || ''),
+      actionData: parsedAction,
+      data: driveResult?.data,
+    });
+  }
   else if (WORKSPACE_ACTIONS.has(actionName)) result = await handleWorkspaceAction(parsedAction, deps, context);
   else if (SYSTEM_ACTIONS.has(actionName)) result = await handleSystemAction(parsedAction, deps, context);
   else if (MEDIA_ACTIONS.has(actionName)) result = await handleMediaAction(parsedAction, deps, context);

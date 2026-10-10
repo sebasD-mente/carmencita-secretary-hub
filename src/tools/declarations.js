@@ -76,7 +76,7 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
   },
   {
     name: 'manage_obsidian_notes',
-    description: 'Administra exclusivamente las notas estructuradas del Obsidian Vault (DekoLabs-Vault): buscar, leer, crear, actualizar, anexar o sincronizar notas en formato Markdown con frontmatter y memoria RAG.',
+    description: 'Bóveda privada de notas personales de Sebastián (segundo cerebro). NO usar para comunicados o reportes inter-agentes.',
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -107,7 +107,7 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
   },
   {
     name: 'manage_drive',
-    description: 'Gestiona archivos y carpetas soberanas en Google Drive API v3 (carpetas oficiales: comunicacion, reportes, custom_agents): listar, leer, crear, actualizar in-place, mover o eliminar.',
+    description: "Buzón oficial y operativo de Google Drive: gestiona archivos soberanos, comunicados inter-agentes (carpeta 'comunicacion'), reportes ejecutivos (carpeta 'reportes') y blueprints de DeKo Labs.",
     parameters: {
       type: Type.OBJECT,
       properties: {

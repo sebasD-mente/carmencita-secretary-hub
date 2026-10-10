@@ -45,6 +45,7 @@ export class CarmencitaBrain {
       ideaService: this.ideaService, excelService: this.excelService, calendarService: this.calendarService,
       contactService: this.contactService, googleTasksService: this.googleTasksService,
       embeddingService: this.embeddingService, obsidianService: this.obsidianService,
+      googleDriveService: this.googleDriveService,
       gmailService: this.gmailService, voiceService: this.voiceService, mediaService: this.mediaService,
       diagnosticsService: this.diagnosticsService, agyBridge: this.agyBridge, ai: this.ai, brain: this,
       storage: this.storage, synthesizeToolResults: (opts) => this._synthesizeToolResults(opts),

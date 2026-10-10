@@ -8,6 +8,7 @@ import { contactService as defaultContactService } from '../services/contact.ser
 import { defaultGoogleTasksService } from '../services/google-tasks.service.js';
 import { defaultEmbeddingService } from '../services/embedding.service.js';
 import { defaultObsidianDriveService } from '../services/obsidian-drive.service.js';
+import { defaultGoogleDriveService } from '../services/google-drive.service.js';
 import { defaultGmailService } from '../services/gmail.service.js';
 import { defaultVoiceService } from '../services/voice.service.js';
 import { defaultMediaService } from '../services/media.service.js';
@@ -28,6 +29,7 @@ export function resolveDefaultDeps(deps = {}) {
     googleTasksService: deps?.googleTasksService || defaultGoogleTasksService,
     embeddingService: deps?.embeddingService !== undefined ? deps.embeddingService : (deps?.prisma ? null : defaultEmbeddingService),
     obsidianService: deps?.obsidianService !== undefined ? deps.obsidianService : defaultObsidianDriveService,
+    googleDriveService: deps?.googleDriveService !== undefined ? deps.googleDriveService : defaultGoogleDriveService,
     gmailService: deps?.gmailService !== undefined ? deps.gmailService : defaultGmailService,
     voiceService: deps?.voiceService !== undefined ? deps.voiceService : defaultVoiceService,
     mediaService: deps?.mediaService !== undefined ? deps.mediaService : defaultMediaService,
