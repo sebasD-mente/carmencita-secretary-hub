@@ -244,11 +244,29 @@ export class ToolDispatcher {
     const type = String(args.type || '').toUpperCase();
     if (type === 'QR') {
       if (!this.deps.mediaService) throw new Error('Servicio de Medios no disponible.');
-      return { success: true, data: { qrFile: await this.deps.mediaService.generateQrCode(args.data?.text || args.data?.data || '') } };
+      const qrFile = await this.deps.mediaService.generateQrCode(args.data?.text || args.data?.data || '');
+      return {
+        success: true,
+        data: {
+          summary: `Código QR generado para: ${args.data?.text || 'enlace'}`,
+          filePath: qrFile?.filePath,
+          fileName: qrFile?.fileName,
+          qrFile, // Preservado para el adapter
+        },
+      };
     }
     if (type === 'EXCEL') {
       if (!this.deps.excelService) throw new Error('Servicio de Excel no disponible.');
-      return { success: true, data: { excelFile: await this.deps.excelService.createExcelReport(args.data) } };
+      const excelFile = await this.deps.excelService.generateExcelFile(args.data || {});
+      return {
+        success: true,
+        data: {
+          summary: `Hoja de cálculo generada: ${excelFile?.fileName}`,
+          fileName: excelFile?.fileName,
+          mimeType: excelFile?.mimeType,
+          excelFile, // Preservado para el adapter
+        },
+      };
     }
     if (type === 'AVATAR') {
       if (!this.deps.mediaService) throw new Error('Servicio de Medios no disponible.');
@@ -267,9 +285,24 @@ export class ToolDispatcher {
       style: args.style,
       signal: context.signal,
     });
+
     if (result?.isSafetyBlock) {
       return { success: false, isSafetyBlock: true, reason: result.reason || 'SAFETY_FILTER_TRIGGERED', data: result };
     }
-    return { success: true, data: result };
+
+    // Tool Response Envelope: retorno liviano con resumen y URL de GCS
+    const assetUrl = result.cloudUrl || result.publicUrl || '';
+    return {
+      success: true,
+      data: {
+        assetUrl,
+        filePath: result.filePath,
+        fileName: result.fileName,
+        dimensions: result.aspectRatio || '1:1',
+        summary: `Render generado exitosamente (${result.mode || 'arte_final'}) con ${result.model}: ${result.fileName}`,
+        model: result.model,
+        buffer: result.buffer, // Preservado para que mapToolSummaryToActionResult arme photoFile hacia Telegram
+      },
+    };
   }
 }

@@ -142,6 +142,10 @@ export class ExcelService {
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     };
   }
+
+  async createExcelReport(options) {
+    return this.generateExcelFile(options);
+  }
 }
 
 export const excelService = new ExcelService();

@@ -3,8 +3,8 @@ import { defaultStorageProvider } from './storage.provider.js';
 import { geminiPool as defaultGeminiPool } from './gemini-pool.service.js';
 import { config } from '../config.js';
 
-export const PRO_MODELS = ['gemini-3-pro-image', 'gemini-3.1-flash-image', 'gemini-2.5-flash-image'];
-export const FLASH_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image', 'gemini-nano-banana-2.1'];
+export const PRO_MODELS = ['gemini-3-pro-image', 'gemini-3.1-flash-image'];
+export const FLASH_MODELS = ['gemini-3.1-flash-image', 'gemini-3.1-flash-lite-image'];
 
 export class QuotaExceededError extends Error {
   constructor(message = 'Cuota de generación visual de Gemini agotada en todos los modelos y llaves del pool.') {
@@ -113,15 +113,6 @@ export class ImageGenerationService {
       }
     }
 
-    const genImages = response.generatedImages || [];
-    if (genImages.length > 0 && genImages[0]?.image?.imageBytes) {
-      const bytes = genImages[0].image.imageBytes;
-      return {
-        buffer: Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, 'base64'),
-        mimeType: genImages[0].image.mimeType || 'image/png',
-      };
-    }
-
     return null;
   }
 
@@ -148,21 +139,14 @@ export class ImageGenerationService {
           });
 
           const generatePromise = (async () => {
-            if (client.models?.generateContent) {
-              return await client.models.generateContent({
-                model: modelName,
-                contents: [{ role: 'user', parts: [{ text: expandedPrompt }] }],
-                config: { responseModalities: ['IMAGE'] },
-              });
+            if (!client.models?.generateContent) {
+              throw new Error('El cliente de Gemini no soporta el método generateContent para generación visual.');
             }
-            if (client.models?.generateImages) {
-              return await client.models.generateImages({
-                model: modelName,
-                prompt: expandedPrompt,
-                config: { numberOfImages: 1, outputMimeType: 'image/png', aspectRatio },
-              });
-            }
-            throw new Error('El cliente de Gemini no soporta métodos de generación de imagen.');
+            return await client.models.generateContent({
+              model: modelName,
+              contents: [{ role: 'user', parts: [{ text: expandedPrompt }] }],
+              config: { responseModalities: ['IMAGE'] },
+            });
           })();
 
           const response = await Promise.race([generatePromise, timeoutPromise]);

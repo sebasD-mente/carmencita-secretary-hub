@@ -18,7 +18,12 @@ export class MediaService {
     });
   }
 
-  async generateQrCode({ text, title = 'Código QR', fileName = null }) {
+  async generateQrCode(input) {
+    const opts = typeof input === 'string' ? { text: input } : (input || {});
+    const text = opts.text;
+    const title = opts.title || 'Código QR';
+    const fileName = opts.fileName || null;
+
     if (!text) throw new Error('El texto o URL para el QR es obligatorio');
     const safeName = fileName || `qr_${Date.now()}.png`;
     const filePath = path.join(this.qrDir, safeName);
@@ -61,6 +66,10 @@ export class MediaService {
       }
     }
     return null;
+  }
+
+  getCarmencitaAvatar() {
+    return this.resolveProfilePicture();
   }
 }
 

@@ -19,16 +19,40 @@ export function sanitizeToolResponseForModel(data) {
 
   const sanitized = {};
   for (const [key, value] of Object.entries(data)) {
-    if (key === 'buffer' || key === 'dataBuffer' || key === 'excelFile' || key === 'photoFile' || key === 'qrFile') {
-      if (value && (Buffer.isBuffer(value) || typeof value === 'object')) {
+    // 1. Purgar buffers directos (Buffer o serializado { type: 'Buffer', data: [] })
+    if (Buffer.isBuffer(value) || (value && value.type === 'Buffer' && Array.isArray(value.data))) {
+      if (key === 'buffer' || key === 'dataBuffer' || key === 'rawBytes') {
+        sanitized[key] = '[BINARY_BUFFER_OMITTED]';
+      }
+      continue;
+    }
+
+    // 2. Claves de archivos conocidos con buffer anidado
+    if (key === 'photoFile' || key === 'excelFile' || key === 'qrFile') {
+      if (value && (Buffer.isBuffer(value) || (typeof value === 'object' && (value.buffer || value.type === 'Buffer')))) {
         sanitized[key] = '[BINARY_BUFFER_OMITTED]';
         continue;
       }
     }
-    if (typeof value === 'string' && value.length > 2000 && !value.includes(' ') && /^[A-Za-z0-9+/=]+$/.test(value.slice(0, 100))) {
+
+    // 3. Objeto archivo contenedor que resguarda un buffer en su interior
+    if (value && typeof value === 'object' && value.type !== 'Buffer' && (Buffer.isBuffer(value.buffer) || (value.buffer?.type === 'Buffer' && Array.isArray(value.buffer?.data)))) {
+      sanitized[key] = {
+        fileName: value.fileName || key,
+        mimeType: value.mimeType || 'application/octet-stream',
+        summary: '[BUFFER_RESGUARDADO_EN_STORAGE]',
+        filePath: value.filePath || undefined,
+        cloudUrl: value.cloudUrl || undefined,
+      };
+      continue;
+    }
+
+    // 4. Purgar cadenas Base64 largas (> 1,000 caracteres)
+    if (typeof value === 'string' && value.length > 1000 && !value.includes(' ') && /^[A-Za-z0-9+/=]+$/.test(value.slice(0, 100))) {
       sanitized[key] = '[BASE64_OMITTED]';
       continue;
     }
+
     const cleaned = sanitizeToolResponseForModel(value);
     if (cleaned !== undefined) {
       sanitized[key] = cleaned;
@@ -317,10 +341,11 @@ export function mapToolSummaryToActionResult(runnerResult) {
       if (data?.avatar) { opts.hasPhoto = true; opts.photoFile = data.avatar; }
       opts.actionData = { action: 'GENERATE_MEDIA', ...(data || {}) };
     } else if (name === 'generate_image') {
-      if (data?.buffer) {
+      if (data?.buffer || data?.filePath) {
         opts.hasPhoto = true;
         opts.photoFile = {
-          buffer: data.buffer,
+          buffer: data.buffer || null,
+          path: data.filePath || null,
           fileName: data.fileName || 'nano_generated.png',
           caption: runnerResult.reply,
         };
@@ -333,4 +358,3 @@ export function mapToolSummaryToActionResult(runnerResult) {
   }
   return makeActionResult(opts);
 }
-

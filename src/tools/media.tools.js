@@ -84,7 +84,7 @@ export async function handleMediaAction(parsedAction, deps, context = {}) {
       reply,
       hasExcel: Boolean(excelFile),
       excelFile,
-      fullHistoryText: `${cleanText}\n[Archivo Excel generado: ${excelFile?.fileName || 'documento.xlsx'}]`,
+      fullHistoryText: `${cleanText || reply}\n[Archivo Excel generado: ${excelFile?.fileName || 'documento.xlsx'}]`,
       actionData: parsedAction,
     });
   }
