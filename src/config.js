@@ -6,7 +6,7 @@ import { validateEnv } from './validators/env.schema.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config();
+dotenv.config({ override: true });
 
 // Fail-fast perimetral: valida variables obligatorias al arranque
 validateEnv(process.env);

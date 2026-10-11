@@ -16,11 +16,10 @@ export class ToolDispatcher {
   isDestructiveAction(toolName, args = {}) {
     if (['DELETE_EVENT', 'CANCEL_CALENDAR_EVENT', 'SEND_EMAIL', 'CANCEL_TASK', 'DELETE_NOTE', 'DELETE_DRIVE_FILE'].includes(toolName)) return true;
     const a = String(args.action || '').toUpperCase();
-    if (toolName === 'manage_calendar') return a === 'CANCEL' || a === 'DELETE' || a === 'DELETE_EVENT';
-    if (toolName === 'manage_tasks') return a === 'CANCEL';
-    if (toolName === 'manage_obsidian_notes') return a === 'DELETE' || a === 'DELETE_NOTE';
-    if (toolName === 'manage_drive') return a === 'DELETE';
-    return false;
+    return (toolName === 'manage_calendar' && ['CANCEL', 'DELETE', 'DELETE_EVENT'].includes(a))
+      || (toolName === 'manage_tasks' && a === 'CANCEL')
+      || (toolName === 'manage_obsidian_notes' && (a === 'DELETE' || a === 'DELETE_NOTE'))
+      || (toolName === 'manage_drive' && a === 'DELETE');
   }
 
   async dispatch(toolName, rawArgs = {}, context = {}) {
@@ -31,6 +30,15 @@ export class ToolDispatcher {
     } else if (toolName === 'generate_image') {
       const parsed = GenerateImageActionSchema.safeParse(rawArgs);
       validation = parsed.success ? { valid: true, data: parsed.data } : { valid: false, error: parsed.error.format() };
+    } else if (toolName === 'run_agy_task') {
+      const prompt = rawArgs?.prompt || rawArgs?.task || rawArgs?.command;
+      if (!prompt || typeof prompt !== 'string') {
+        validation = { valid: false, error: { prompt: { _errors: ['El parámetro prompt es requerido.'] } } };
+      } else {
+        validation = { valid: true, data: { prompt } };
+      }
+    } else if (toolName === 'search_gmail' && rawArgs?.messageId && !rawArgs?.query) {
+      validation = { valid: true, data: { ...rawArgs, query: '' } };
     } else {
       validation = validateToolArgs(toolName, rawArgs);
     }
@@ -121,6 +129,8 @@ export class ToolDispatcher {
           return await this._handleMedia(args, context);
         case 'generate_image':
           return await this._handleImage(args, context);
+        case 'run_agy_task':
+          return await this._handleAgy(args, context);
         default:
           return { success: false, error: { code: 'UNKNOWN_TOOL', message: `No existe un controlador registrado para la herramienta: ${toolName}` } };
       }
@@ -133,23 +143,10 @@ export class ToolDispatcher {
     const service = this.deps.calendarService;
     if (!service) throw new Error('Servicio de Google Calendar no disponible.');
     const action = String(args.action || '').toUpperCase();
-
-    if (action === 'CREATE') {
-      const event = await service.createEvent({ summary: args.summary, startDateTime: args.startTime, endDateTime: args.endTime, location: args.location });
-      return { success: true, data: { action: 'CREATE', event } };
-    }
-    if (action === 'LIST') {
-      const events = await service.listEvents({ timeMin: args.timeMin, timeMax: args.timeMax, range: args.range });
-      return { success: true, data: { action: 'LIST', events } };
-    }
-    if (action === 'RESCHEDULE') {
-      const event = await service.rescheduleEvent({ eventId: args.eventId, newStartDateTime: args.startTime, newEndDateTime: args.endTime });
-      return { success: true, data: { action: 'RESCHEDULE', event } };
-    }
-    if (action === 'CANCEL') {
-      const result = await service.cancelEvent({ eventId: args.eventId, summary: args.summary });
-      return { success: true, data: { action: 'CANCEL', result } };
-    }
+    if (action === 'CREATE') return { success: true, data: { action, event: await service.createEvent({ summary: args.summary, startDateTime: args.startTime, endDateTime: args.endTime, location: args.location }) } };
+    if (action === 'LIST') return { success: true, data: { action, events: await service.listEvents({ timeMin: args.timeMin, timeMax: args.timeMax, range: args.range }) } };
+    if (action === 'RESCHEDULE') return { success: true, data: { action, event: await service.rescheduleEvent({ eventId: args.eventId, newStartDateTime: args.startTime, newEndDateTime: args.endTime }) } };
+    if (action === 'CANCEL') return { success: true, data: { action, result: await service.cancelEvent({ eventId: args.eventId, summary: args.summary }) } };
     throw new Error(`Acción no soportada en calendar: ${action}`);
   }
 
@@ -157,11 +154,27 @@ export class ToolDispatcher {
     const service = this.deps.gmailService;
     if (!service) throw new Error('Servicio de Gmail no disponible.');
     if (args.messageId) {
-      const email = await service.readEmail(args.messageId);
+      const email = await service.getEmailDetails({ messageId: args.messageId });
       return { success: true, data: { email } };
     }
-    const emails = await service.searchEmails(args.query, args.maxResults || 5);
-    return { success: true, data: { query: args.query, count: Array.isArray(emails) ? emails.length : 0, emails } };
+    const searchPayload = {
+      query: args.query || '',
+      maxResults: args.maxResults || 5,
+      onlyImportant: args.onlyImportant ?? false,
+      includeRead: args.includeRead ?? true,
+    };
+    const callArg = (typeof service.getEmailDetails === 'function' || service.isStructured || !service.searchEmails || service.getInboxSummary)
+      ? searchPayload
+      : (service.searchEmails.length === 1 ? (args.query || '') : searchPayload);
+    const emails = await service.searchEmails(callArg);
+    return { success: true, data: { query: args.query || '', count: Array.isArray(emails) ? emails.length : 0, emails } };
+  }
+
+  async _handleAgy(args) {
+    const agy = this.deps.agyBridge;
+    if (!agy) throw new Error('AgyBridge no disponible en despachador.');
+    const result = await agy.executeTask(args.prompt);
+    return { success: result?.success ?? true, data: result };
   }
 
   async _handleObsidian(args) {
@@ -196,11 +209,8 @@ export class ToolDispatcher {
     if (action === 'LIST') return { success: true, data: { tasks: await service.listTasks({ onlyPending: true }) } };
     if (action === 'COMPLETE') return { success: true, data: { task: await service.completeTask(args.taskId || args.title) } };
     if (action === 'CANCEL') {
-      const task = typeof service.cancelTask === 'function'
-        ? await service.cancelTask(args.taskId || args.title)
-        : (typeof service.cancelTaskByNameOrId === 'function'
-            ? await service.cancelTaskByNameOrId({ id: args.taskId || null, query: args.title || null })
-            : null);
+      const task = typeof service.cancelTask === 'function' ? await service.cancelTask(args.taskId || args.title)
+        : (typeof service.cancelTaskByNameOrId === 'function' ? await service.cancelTaskByNameOrId({ id: args.taskId || null, query: args.title || null }) : null);
       return { success: true, data: { task } };
     }
     throw new Error(`Acción de tareas no reconocida: ${action}`);
@@ -234,18 +244,15 @@ export class ToolDispatcher {
     const type = String(args.type || '').toUpperCase();
     if (type === 'QR') {
       if (!this.deps.mediaService) throw new Error('Servicio de Medios no disponible.');
-      const qrFile = await this.deps.mediaService.generateQrCode(args.data?.text || args.data?.data || '');
-      return { success: true, data: { qrFile } };
+      return { success: true, data: { qrFile: await this.deps.mediaService.generateQrCode(args.data?.text || args.data?.data || '') } };
     }
     if (type === 'EXCEL') {
       if (!this.deps.excelService) throw new Error('Servicio de Excel no disponible.');
-      const excelFile = await this.deps.excelService.createExcelReport(args.data);
-      return { success: true, data: { excelFile } };
+      return { success: true, data: { excelFile: await this.deps.excelService.createExcelReport(args.data) } };
     }
     if (type === 'AVATAR') {
       if (!this.deps.mediaService) throw new Error('Servicio de Medios no disponible.');
-      const avatar = await this.deps.mediaService.getCarmencitaAvatar();
-      return { success: true, data: { avatar } };
+      return { success: true, data: { avatar: await this.deps.mediaService.getCarmencitaAvatar() } };
     }
     throw new Error(`Tipo de medio no soportado: ${type}`);
   }

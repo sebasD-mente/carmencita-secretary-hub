@@ -288,16 +288,6 @@ export class SchedulerService {
 
       if (alreadyNotified || this.notifiedEmailIds?.has(m.id)) continue;
 
-      // Filtro de Ventana Temporal Fresca (2 Horas) [DEKO-CARMEN-048]
-      const emailDate = m.date ? new Date(m.date) : null;
-      const twoHoursAgo = nowMs - (2 * 60 * 60 * 1000);
-      if (emailDate && !isNaN(emailDate.getTime()) && emailDate.getTime() < twoHoursAgo) {
-        // Correo antiguo: registrar silenciosamente en NotifiedEmail para no volver a evaluar, pero NO despachar alerta como "nuevo"
-        const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
-        await this._recordNotifiedEmail(m, fromClean);
-        continue;
-      }
-
       let triageResult = null;
       if (this.emailTriageService?.classifyEmail) {
         try {
@@ -321,6 +311,19 @@ export class SchedulerService {
           oneLineSummary: m.subject || '',
           executiveReason: legacyPrio ? 'Prioritario por filtro heurístico' : 'Ruido descartado',
         };
+      }
+
+      // Ventana Temporal Inteligente: 24h para Infraestructura / Financiero / Crítico, 2h para el resto [DEKO-CARMEN-050]
+      const emailDate = m.date ? new Date(m.date) : null;
+      const isPriorityCategory = triageResult.category === 'INFRAESTRUCTURA' || triageResult.category === 'FINANCIERO';
+      const isHighUrgency = triageResult.urgency === 'CRITICO' || triageResult.urgency === 'ALTA';
+      const maxAgeHours = (isPriorityCategory && isHighUrgency) ? 24 : (isPriorityCategory ? 24 : 2);
+      const maxAgeMs = nowMs - (maxAgeHours * 60 * 60 * 1000);
+
+      if (emailDate && !isNaN(emailDate.getTime()) && emailDate.getTime() < maxAgeMs) {
+        const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+        await this._recordNotifiedEmail(m, fromClean);
+        continue;
       }
 
       // Canal Asíncrono de Emergencia de Sebastián

@@ -265,19 +265,22 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
     parameters: {
       type: Type.OBJECT,
       properties: {
+        prompt: { type: Type.STRING, description: 'Descripción de la escena o diseño visual a generar.' },
+        aspectRatio: { type: Type.STRING, enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Relación de aspecto deseada.' },
+        mode: { type: Type.STRING, enum: ['boceto', 'arte_final'], description: 'boceto para lluvia de ideas rápida; arte_final para máxima fidelidad.' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'run_agy_task',
+    description: 'Ejecuta una tarea técnica o comando de diagnóstico en la terminal del VPS usando AGY CLI.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
         prompt: {
           type: Type.STRING,
-          description: 'Descripción de la escena o diseño visual a generar.',
-        },
-        aspectRatio: {
-          type: Type.STRING,
-          enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
-          description: 'Relación de aspecto deseada.',
-        },
-        mode: {
-          type: Type.STRING,
-          enum: ['boceto', 'arte_final'],
-          description: 'boceto para lluvia de ideas rápida; arte_final para máxima fidelidad.',
+          description: 'Instrucción o tarea técnica a ejecutar en el servidor (ej: status, docker ps, uptime).',
         },
       },
       required: ['prompt'],

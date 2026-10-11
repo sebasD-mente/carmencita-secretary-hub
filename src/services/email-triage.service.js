@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { defaultGeminiPool } from './gemini-pool.service.js';
+import { config } from '../config.js';
 
 /**
  * 🏛️ EmailTriageService - Triaje Cognitivo de Gmail y Radar VIP [DEKO-CARMEN-047]
@@ -32,10 +33,10 @@ const SUBSCRIPTION_KEYWORDS = /(?:openai|anthropic|elevenlabs|vercel|supabase|re
 const NOISE_KEYWORDS = /(?:uber eats|pedidosya|spotify|descuento exclusivo|cup[oó]n|promo@|ofertas@|deals@|newsletter|bolet[ií]n)/i;
 
 export class EmailTriageService {
-  constructor({ geminiPool = defaultGeminiPool, ai = null, modelName = 'gemini-2.5-flash-lite' } = {}) {
+  constructor({ geminiPool = defaultGeminiPool, ai = null, modelName = null } = {}) {
     this.geminiPool = geminiPool;
     this.ai = ai;
-    this.modelName = modelName;
+    this.modelName = modelName || config?.ai?.modelName || 'gemini-3.8-flash';
   }
 
   async classifyEmail({ from = '', to = '', subject = '', snippet = '', bodyText = '' } = {}) {
@@ -77,8 +78,17 @@ export class EmailTriageService {
     return this._classifyHeuristically({ from: cleanFrom, subject: cleanSubject, snippet: cleanSnippet, bodyText: cleanBody });
   }
 
+  _getClient() {
+    if (this.ai) return this.ai;
+    const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.NODE_TEST_CONTEXT) || process.argv.some((a) => a.includes('test'));
+    if (this.geminiPool && !isTest) {
+      return this.geminiPool.getClient?.() || null;
+    }
+    return null;
+  }
+
   async _classifyWithLLM({ from, subject, snippet, bodyText }) {
-    const aiClient = this.ai || this.geminiPool?.getClient();
+    const aiClient = this._getClient();
     if (!aiClient?.models?.generateContent) return null;
 
     const truncated = (bodyText || snippet).slice(0, 1500);
@@ -158,7 +168,7 @@ Devuelve EXCLUSIVAMENTE este JSON:
   async generateExecutiveEmailBriefing(priorityItems = []) {
     if (!priorityItems || priorityItems.length === 0) return '';
 
-    const aiClient = this.ai || this.geminiPool?.getClient();
+    const aiClient = this._getClient();
     if (!aiClient?.models?.generateContent) {
       return this._fallbackDynamicBriefing(priorityItems);
     }
@@ -186,8 +196,9 @@ DATOS DE CORREOS:
 ${JSON.stringify(itemsData, null, 2)}`;
 
     try {
+      const activeModel = this.modelName || config?.ai?.modelName || 'gemini-3.8-flash';
       const res = await aiClient.models.generateContent({
-        model: this.modelName || 'gemini-2.5-flash-lite',
+        model: activeModel,
         contents: prompt,
         config: { temperature: 0.3 },
       });
@@ -196,6 +207,10 @@ ${JSON.stringify(itemsData, null, 2)}`;
     } catch {
       return this._fallbackDynamicBriefing(priorityItems);
     }
+  }
+
+  async synthesizeTriageBriefing(priorityItems = []) {
+    return await this.generateExecutiveEmailBriefing(priorityItems);
   }
 
   _fallbackDynamicBriefing(priorityItems = []) {
@@ -219,7 +234,7 @@ ${JSON.stringify(itemsData, null, 2)}`;
       const footer = isAuto
         ? 'ℹ️ Es una confirmación o alerta del sistema en orden; no requiere acción de tu parte.'
         : 'Quedo atenta si decides que avancemos con alguna gestión.';
-      return `✉️ <b>¡Jefecito, acaba de entrar un correo importante!</b>\n\n${it.icon} <b>De:</b> ${it.fromClean}\n📌 <i>${it.subject}</i>\n${it.summary}\n\n${footer}`;
+      return `✉️ <b>Sebas, novedad en tu bandeja:</b>\n\n${it.icon} <b>De:</b> ${it.fromClean}\n📌 <i>${it.subject}</i>\n${it.summary}\n\n${footer}`;
     }
 
     const allAuto = lines.every((l) => l.isNoReply || l.cat === 'INFRAESTRUCTURA' || l.cat === 'FINANCIERO');

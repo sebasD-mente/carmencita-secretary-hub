@@ -3,6 +3,41 @@ import { sanitizeReplyText, makeActionResult } from '../tools/index.js';
 import { config } from '../config.js';
 
 /**
+ * Sanitiza recursivamente el resultado de herramientas para evitar desbordar
+ * la ventana de contexto de Gemini con datos binarios (Buffers) o cadenas Base64 gigantes.
+ * @param {unknown} data
+ * @returns {unknown}
+ */
+export function sanitizeToolResponseForModel(data) {
+  if (!data || typeof data !== 'object') return data;
+  if (Buffer.isBuffer(data)) return undefined;
+  if (data.type === 'Buffer' && Array.isArray(data.data)) return undefined;
+
+  if (Array.isArray(data)) {
+    return data.map(sanitizeToolResponseForModel).filter((x) => x !== undefined);
+  }
+
+  const sanitized = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key === 'buffer' || key === 'dataBuffer' || key === 'excelFile' || key === 'photoFile' || key === 'qrFile') {
+      if (value && (Buffer.isBuffer(value) || typeof value === 'object')) {
+        sanitized[key] = '[BINARY_BUFFER_OMITTED]';
+        continue;
+      }
+    }
+    if (typeof value === 'string' && value.length > 2000 && !value.includes(' ') && /^[A-Za-z0-9+/=]+$/.test(value.slice(0, 100))) {
+      sanitized[key] = '[BASE64_OMITTED]';
+      continue;
+    }
+    const cleaned = sanitizeToolResponseForModel(value);
+    if (cleaned !== undefined) {
+      sanitized[key] = cleaned;
+    }
+  }
+  return sanitized;
+}
+
+/**
  * Núcleo Agéntico Autónomo ReAct (Reasoning + Acting) para Carmencita 2.0.
  * Utiliza Native Tool Calling de @google/genai, contratos tipados Zod,
  * temperatura bimodal (0.1 en deliberación, 0.6 en síntesis) y Circuit Breakers globales.
@@ -195,7 +230,7 @@ export class AgentRunner {
             responseParts.push({
               functionResponse: {
                 name: call.name,
-                response: toolResult,
+                response: sanitizeToolResponseForModel(toolResult),
               },
             });
           }
@@ -291,6 +326,9 @@ export function mapToolSummaryToActionResult(runnerResult) {
         };
       }
       opts.actionData = { action: 'GENERATE_IMAGE', ...(data || {}) };
+    } else if (name === 'run_agy_task') {
+      opts.hasAsyncAction = false;
+      opts.actionData = { action: 'RUN_AGY_TASK', ...(data || {}) };
     }
   }
   return makeActionResult(opts);
