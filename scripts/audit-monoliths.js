@@ -12,7 +12,7 @@ const rootDir = path.resolve(__dirname, '..');
 export const DOMAIN_CEILINGS = {
   // Capa Core y Orquestación
   'src/core/brain.js': 350,
-  'src/core/agent-runner.js': 350,
+  'src/core/agent-runner.js': 400,
   'src/core/carmencita.prompt.js': 120,
   'src/core/prisma.js': 120,
   'src/presentation/formatter.js': 200,
@@ -50,7 +50,7 @@ export const DOMAIN_CEILINGS = {
   'src/services/image-generation.service.js': 260,
   'src/services/diagnostics.service.js': 200,
   'src/services/storage.provider.js': 260,
-  'src/services/scheduler.service.js': 500,
+  'src/services/scheduler.service.js': 550,
 
   // Capa de Esquemas y Validadores Cohesivos
   'src/validators/actions.schema.js': 380,

@@ -1,6 +1,6 @@
 import { Bot, InputFile, InlineKeyboard } from 'grammy';
 import { config } from '../config.js';
-import { PresentationFormatter } from '../presentation/formatter.js';
+import { PresentationFormatter, balanceHtmlTags } from '../presentation/formatter.js';
 import { UserSessionQueue } from './session-queue.js';
 
 export class TelegramAdapter {
@@ -18,6 +18,9 @@ export class TelegramAdapter {
     this.stagedActions = new Map();
     this.bot = null;
     this.isRunning = false;
+    this.reconnectAttempts = 0;
+    this.reconnectTimeout = null;
+    this.isStopped = false;
   }
 
   init(customBot = null) {
@@ -111,16 +114,19 @@ export class TelegramAdapter {
 
   async _safeReply(ctx, text) {
     const formatted = PresentationFormatter.formatForTelegram(text);
-    const str = String(formatted || '');
-    const maxLength = 3900;
+    return await this._sendChunked(ctx, formatted);
+  }
+
+  async _sendChunked(ctx, text, maxLength = 3900) {
+    const str = String(text || '');
     if (str.length <= maxLength) {
-      await this._sendSingleChunk(ctx, str);
-      return;
+      return await this._sendSingleChunk(ctx, balanceHtmlTags(str));
     }
 
     const chunks = [];
     let current = '';
     const lines = str.split('\n');
+
     for (const line of lines) {
       if ((current + '\n' + line).length > maxLength) {
         if (current) chunks.push(current);
@@ -131,13 +137,10 @@ export class TelegramAdapter {
     }
     if (current) chunks.push(current);
 
+    // Enviar cada chunk con balanceo estricto de etiquetas abiertas
     for (let i = 0; i < chunks.length; i++) {
-      let chunk = chunks[i];
-      const openCount = (chunk.match(/<pre>/g) || []).length;
-      const closeCount = (chunk.match(/<\/pre>/g) || []).length;
-      if (openCount > closeCount) chunk += '</pre>';
-      else if (closeCount > openCount) chunk = '<pre>' + chunk;
-      await this._sendSingleChunk(ctx, chunk);
+      const balancedChunk = balanceHtmlTags(chunks[i]);
+      await this._sendSingleChunk(ctx, balancedChunk);
     }
   }
 
@@ -576,21 +579,36 @@ export class TelegramAdapter {
     if (!this.bot) return;
     try {
       this.isRunning = true;
+      this.isStopped = false;
       console.log('🤖 [Telegram] Iniciando bot con Long Polling...');
       this.bot.start({
         drop_pending_updates: false,
+        allowed_updates: ['message', 'callback_query'],
         onStart: (botInfo) => {
+          this.reconnectAttempts = 0;
           console.log(`✅ [Telegram] Conectado exitosamente como @${botInfo.username}`);
         },
       }).catch((err) => {
-        console.error('[Telegram Polling Loop Error]', err.message);
+        this.isRunning = false;
+        if (this.isStopped) return;
+        const delayMs = Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempts));
+        this.reconnectAttempts++;
+        console.error(`🚨 [Telegram Polling Error] Error de red (${err.message}). Reintentando conexión en ${delayMs / 1000}s (Intento #${this.reconnectAttempts})...`);
+        this.reconnectTimeout = setTimeout(() => {
+          if (!this.isStopped) this.start();
+        }, delayMs);
       });
     } catch (err) {
-      console.error('[Telegram] Error al iniciar bot:', err);
+      console.error('[Telegram] Error crítico al inicializar bot:', err.message);
     }
   }
 
   async stop() {
+    this.isStopped = true;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
     if (this.bot && this.isRunning) {
       await this.bot.stop();
       this.isRunning = false;

@@ -59,25 +59,36 @@ export class SchedulerService {
     });
     this.timer = null;
     this.isRunning = false;
+    this.isTickRunning = false;
     this.isChecking = false;
   }
 
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log(`⏱️ [Scheduler] Motor proactivo y las 6 rutinas cardinales iniciadas (pulso cada ${this.intervalMs / 1000}s)`);
+    this.isTickRunning = false;
+    console.log(`⏱️ [Scheduler] Motor proactivo y las 7 rutinas cardinales iniciadas (pulso cada ${this.intervalMs / 1000}s)`);
 
     this.timer = setInterval(async () => {
+      if (this.isTickRunning) {
+        console.warn('⚠️ [Scheduler] Ciclo previo aún en ejecución. Omitiendo tick para evitar contención de event loop.');
+        return;
+      }
+      this.isTickRunning = true;
       try {
-        await this.checkPendingTasks();
-        await this.checkMeetingAlerts();
-        await this.checkMorningBrief();
-        await this.checkMiddaySync();
-        await this.checkEveningDebrief();
-        await this.checkInboxWatchdog();
-        await this.checkNightlyMaintenance();
+        await Promise.allSettled([
+          this.checkPendingTasks(),
+          this.checkMeetingAlerts(),
+          this.checkMorningBrief(),
+          this.checkMiddaySync(),
+          this.checkEveningDebrief(),
+          this.checkInboxWatchdog(),
+          this.checkNightlyMaintenance(),
+        ]);
       } catch (err) {
         console.error('[Scheduler] Error en ciclo periódico del scheduler:', err.message);
+      } finally {
+        this.isTickRunning = false;
       }
     }, this.intervalMs);
 
@@ -90,6 +101,7 @@ export class SchedulerService {
       this.timer = null;
     }
     this.isRunning = false;
+    this.isTickRunning = false;
     console.log('🛑 [Scheduler] Motor proactivo detenido.');
   }
 
@@ -251,7 +263,8 @@ export class SchedulerService {
   async checkInboxWatchdog(referenceDate = new Date(), force = false) {
     if (!this.gmailService) return [];
     const { hour } = getGuatemalaTimeParts(referenceDate);
-    if (!force && (hour < 8 || hour >= 20)) return [];
+    const isNightTime = !force && (hour < 8 || hour >= 20);
+    // Si es horario nocturno, NO se apaga el radar; opera en modo centinela exclusivo para Nivel 1 [Punto 13]
 
     const nowMs = referenceDate.getTime();
     const THROTTLE_MS = 5 * 60 * 1000;
@@ -313,14 +326,38 @@ export class SchedulerService {
         };
       }
 
-      // Ventana Temporal Inteligente: 24h para Infraestructura / Financiero / Crítico, 2h para el resto [DEKO-CARMEN-050]
+      // Triaje Criterial por Reputación y Urgencia [Puntos 04 y 13]
+      const isNivel1 = triageResult.category === 'INFRAESTRUCTURA' ||
+                      triageResult.category === 'FINANCIERO' ||
+                      triageResult.category === 'EMERGENCIA_SEBASTIAN' ||
+                      triageResult.urgency === 'CRITICO';
+
+      const isNivel2 = triageResult.category === 'CLIENTE_NEGOCIO' ||
+                      triageResult.category === 'SUSCRIPCION' ||
+                      triageResult.urgency === 'ALTA';
+
+      // En horario nocturno solo se despachan alertas Nivel 1 [Punto 13]
+      // Nivel 2 y 3 no se tocan de noche ni se marcan como notificados para evaluarse a las 8 AM
+      if (isNightTime && !isNivel1) {
+        continue;
+      }
+
+      // Triaje Criterial por Antigüedad [Punto 04]:
+      // Nivel 1: Ventana de hasta 48 horas (resiliencia ante reinicios y caídas de servidor)
+      // Nivel 2: Ventana de 24 horas (horario laboral)
+      // Nivel 3: Ventana de 6 horas
       const emailDate = m.date ? new Date(m.date) : null;
-      const isPriorityCategory = triageResult.category === 'INFRAESTRUCTURA' || triageResult.category === 'FINANCIERO';
-      const isHighUrgency = triageResult.urgency === 'CRITICO' || triageResult.urgency === 'ALTA';
-      const maxAgeHours = (isPriorityCategory && isHighUrgency) ? 24 : (isPriorityCategory ? 24 : 2);
+      const maxAgeHours = isNivel1 ? 48 : (isNivel2 ? 24 : 6);
       const maxAgeMs = nowMs - (maxAgeHours * 60 * 60 * 1000);
 
       if (emailDate && !isNaN(emailDate.getTime()) && emailDate.getTime() < maxAgeMs) {
+        const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
+        await this._recordNotifiedEmail(m, fromClean);
+        continue;
+      }
+
+      // Si no es Nivel 1 ni Nivel 2, es Nivel 3 (ruido/promociones): registrar silenciosamente sin alertar
+      if (!isNivel1 && !isNivel2) {
         const fromClean = m.from ? m.from.replace(/<[^>]+>/, '').trim() : 'Remitente';
         await this._recordNotifiedEmail(m, fromClean);
         continue;
@@ -367,7 +404,8 @@ export class SchedulerService {
         continue;
       }
 
-      const isPriority = triageResult.urgency === EmailUrgency.CRITICO ||
+      const isPriority = isNivel1 || isNivel2 ||
+                         triageResult.urgency === EmailUrgency.CRITICO ||
                          triageResult.urgency === EmailUrgency.ALTA ||
                          triageResult.urgency === 'CRITICO' ||
                          triageResult.urgency === 'ALTA';

@@ -138,6 +138,14 @@ async function main() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 [Process Guard] Unhandled Rejection detectada:', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('💥 [Process Guard] Uncaught Exception:', err.message, err.stack);
+});
+
 main().catch((err) => {
   console.error('Fatal startup error:', err);
   process.exit(1);
