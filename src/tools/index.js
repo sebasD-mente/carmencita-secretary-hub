@@ -31,13 +31,14 @@ export function makeActionResult(opts = {}) {
     progressSent: opts.progressSent || false, syncResult: opts.syncResult || null, hasObsidianSync: Boolean(opts.syncResult),
     hasDiagnostics: opts.hasDiagnostics || false, diagnostics: opts.diagnostics || null,
     hasStagedAction: opts.hasStagedAction || false, stagedAction: opts.stagedAction || null, stagedActions: opts.stagedActions || null,
-    toString() { return this.reply; },
-    includes(s) { return this.reply.includes(s); },
+    toString() { return this.reply || ''; },
+    includes(s) { return this.reply ? this.reply.includes(s) : false; },
   };
 }
 
 /**
- * Extractor quirúrgico y seguro de bloques JSON de acción en texto de LLM.
+ * @deprecated [DEPRECATED - Milestone 3] Extractor de bloques JSON textuales de acción en desuso.
+ * Toda ejecución de herramientas se realiza exclusivamente mediante Native Tool Calling en AgentRunner.
  */
 export function extractActionJson(rawText) {
   if (!rawText) return null;

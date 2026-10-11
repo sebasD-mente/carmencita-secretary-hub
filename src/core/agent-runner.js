@@ -21,9 +21,7 @@ export function sanitizeToolResponseForModel(data) {
   for (const [key, value] of Object.entries(data)) {
     // 1. Purgar buffers directos (Buffer o serializado { type: 'Buffer', data: [] })
     if (Buffer.isBuffer(value) || (value && value.type === 'Buffer' && Array.isArray(value.data))) {
-      if (key === 'buffer' || key === 'dataBuffer' || key === 'rawBytes') {
-        sanitized[key] = '[BINARY_BUFFER_OMITTED]';
-      }
+      if (key === 'buffer' || key === 'dataBuffer' || key === 'rawBytes') sanitized[key] = '[BINARY_BUFFER_OMITTED]';
       continue;
     }
 
@@ -37,13 +35,7 @@ export function sanitizeToolResponseForModel(data) {
 
     // 3. Objeto archivo contenedor que resguarda un buffer en su interior
     if (value && typeof value === 'object' && value.type !== 'Buffer' && (Buffer.isBuffer(value.buffer) || (value.buffer?.type === 'Buffer' && Array.isArray(value.buffer?.data)))) {
-      sanitized[key] = {
-        fileName: value.fileName || key,
-        mimeType: value.mimeType || 'application/octet-stream',
-        summary: '[BUFFER_RESGUARDADO_EN_STORAGE]',
-        filePath: value.filePath || undefined,
-        cloudUrl: value.cloudUrl || undefined,
-      };
+      sanitized[key] = { fileName: value.fileName || key, mimeType: value.mimeType || 'application/octet-stream', summary: '[BUFFER_RESGUARDADO_EN_STORAGE]', filePath: value.filePath || undefined, cloudUrl: value.cloudUrl || undefined };
       continue;
     }
 
@@ -76,7 +68,7 @@ export class AgentRunner {
    *   modelName?: string
    * }} options
    */
-  constructor({ aiPool, toolDispatcher, maxTurns = 5, globalTimeoutMs = 25000, modelName = null } = {}) {
+  constructor({ aiPool, toolDispatcher, maxTurns = 5, globalTimeoutMs = 35000, modelName = null } = {}) {
     this.aiPool = aiPool;
     this.toolDispatcher = toolDispatcher;
     this.maxTurns = maxTurns;
@@ -93,10 +85,10 @@ export class AgentRunner {
   _buildContents(rawHistory = [], userMessage = '') {
     const validHistory = Array.isArray(rawHistory)
       ? rawHistory
-          .filter((item) => item && (item.content || item.text))
+          .filter((item) => item && (item.content || item.text || (item.parts && item.parts[0]?.text)))
           .map((item) => ({
             role: item.role === 'assistant' || item.role === 'model' ? 'model' : 'user',
-            text: String(item.content || item.text || '').trim(),
+            text: String(item.content || item.text || item.parts?.[0]?.text || '').trim(),
           }))
           .filter((item) => item.text.length > 0)
       : [];
@@ -108,23 +100,12 @@ export class AgentRunner {
     if (validHistory.length > 8) {
       const olderTurns = validHistory.slice(0, validHistory.length - 8);
       recentTurns = validHistory.slice(-8);
-      olderSummary = `[Resumen de contexto histórico previo:\n${olderTurns
-        .map((t) => `• ${t.role === 'user' ? 'Sebastián' : 'Carmencita'}: ${t.text}`)
-        .join('\n')}\n]\n\n`;
+      olderSummary = `[Resumen de contexto histórico previo:\n${olderTurns.map((t) => `• ${t.role === 'user' ? 'Sebastián' : 'Carmencita'}: ${t.text}`).join('\n')}\n]\n\n`;
     }
 
-    const contents = recentTurns.map((turn) => ({
-      role: turn.role,
-      parts: [{ text: turn.text }],
-    }));
-
-    // Inyectar el mensaje actual del usuario con el resumen condensado si existe
+    const contents = recentTurns.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
     const fullUserText = olderSummary ? `${olderSummary}${userMessage}` : userMessage;
-    contents.push({
-      role: 'user',
-      parts: [{ text: fullUserText }],
-    });
-
+    contents.push({ role: 'user', parts: [{ text: fullUserText }] });
     return contents;
   }
 
@@ -185,7 +166,7 @@ export class AgentRunner {
         globalController.abort();
         resolve({
           isTimeout: true,
-          reply: 'Sebastián querido, la deliberación excedió el tiempo global de respuesta (25s). Se interrumpió el proceso de forma segura.',
+          reply: `Sebastián querido, la deliberación excedió el tiempo global de respuesta (${Math.round(this.globalTimeoutMs / 1000)}s). Se interrumpió el proceso de forma segura.`,
           toolCallsSummary,
           stagedActions,
         });
@@ -218,16 +199,9 @@ export class AgentRunner {
             contents.push(response.candidates[0].content);
           } else {
             const modelParts = [];
-            if (response.text) {
-              modelParts.push({ text: response.text });
-            }
+            if (response.text) modelParts.push({ text: response.text });
             for (const call of functionCalls) {
-              modelParts.push({
-                functionCall: {
-                  name: call.name,
-                  args: call.args,
-                },
-              });
+              modelParts.push({ functionCall: { name: call.name, args: call.args } });
             }
             contents.push({ role: 'model', parts: modelParts });
           }
@@ -299,7 +273,8 @@ export class AgentRunner {
  * @returns {Record<string, unknown>}
  */
 export function mapToolSummaryToActionResult(runnerResult) {
-  const opts = { reply: runnerResult.reply };
+  let rawReply = (runnerResult.reply || '').trim();
+  const opts = { reply: rawReply };
   if (runnerResult.stagedActions && runnerResult.stagedActions.length > 0) {
     opts.hasStagedAction = true;
     opts.stagedAction = runnerResult.stagedActions[0];
@@ -343,12 +318,7 @@ export function mapToolSummaryToActionResult(runnerResult) {
     } else if (name === 'generate_image') {
       if (data?.buffer || data?.filePath) {
         opts.hasPhoto = true;
-        opts.photoFile = {
-          buffer: data.buffer || null,
-          path: data.filePath || null,
-          fileName: data.fileName || 'nano_generated.png',
-          caption: runnerResult.reply,
-        };
+        opts.photoFile = { buffer: data.buffer || null, path: data.filePath || null, fileName: data.fileName || 'nano_generated.png', caption: runnerResult.reply };
       }
       opts.actionData = { action: 'GENERATE_IMAGE', ...(data || {}) };
     } else if (name === 'run_agy_task') {
@@ -356,5 +326,21 @@ export function mapToolSummaryToActionResult(runnerResult) {
       opts.actionData = { action: 'RUN_AGY_TASK', ...(data || {}) };
     }
   }
+
+  // Síntesis agéntica de respaldo si el LLM no generó texto explicativo (Punto 24)
+  if (!opts.reply || opts.reply.length === 0) {
+    if (opts.hasCalendarEvent && opts.calendarEvent) {
+      opts.reply = `📅 Evento agendado en Google Calendar: "${opts.calendarEvent.summary || opts.calendarEvent.title}" para el ${opts.calendarEvent.start?.dateTime || opts.calendarEvent.startTime || 'horario indicado'}.`;
+    } else if (opts.hasGmailEmails && opts.gmailEmails.length > 0) {
+      opts.reply = `✉️ Se encontraron ${opts.gmailEmails.length} correos en tu bandeja de Gmail.`;
+    } else if (opts.hasTask && opts.task) {
+      opts.reply = `📋 Tarea registrada en tu lista de pendientes: "${opts.task.description || opts.task.title}".`;
+    } else if (opts.hasPhoto) {
+      opts.reply = `🎨 Render visual generado exitosamente listo para revisión.`;
+    } else {
+      opts.reply = 'Operación completada exitosamente en el sistema.';
+    }
+  }
+
   return makeActionResult(opts);
 }

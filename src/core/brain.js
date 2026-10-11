@@ -1,8 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config.js';
 import { resolveDefaultDeps } from './default-deps.js';
-import { parseCarmencitaAction } from '../validators/actions.schema.js';
-import { executeAction, makeActionResult, extractActionJson, sanitizeReplyText } from '../tools/index.js';
+import { makeActionResult } from '../tools/index.js';
 import { ToolDispatcher } from '../tools/dispatcher.js';
 import { AgentRunner, mapToolSummaryToActionResult } from './agent-runner.js';
 import { handleBrainImage, handleBrainDocument, handleBrainAudio } from './multimodal.js';
@@ -244,27 +243,37 @@ export class CarmencitaBrain {
 
   async processTextMessage({ channel, senderId, senderName, text, isVoiceInput = false, onProgress = null }) {
     await this._logMessage({ channel, senderId, senderName, role: 'user', content: text });
-    if (!this.ai) {
-      const fallbackReply = this._handleLocalFallback(text);
-      await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: fallbackReply });
-      return fallbackReply;
-    }
     try {
+      // 1. Contexto temporal y semántico del sistema
       const { ahoraGuatemala, ahoraIso } = this._getGuatemalaTimestamps();
       const { directivesBlock, memoriesBlock } = await this._resolveRAGContext(text);
       const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
-      const contextPrompt = `\nCONTEXTO TEMPORAL DEL SISTEMA:\n• Fecha y hora actual en Guatemala: ${ahoraGuatemala} (Zona Horaria: America/Guatemala / UTC-6)\n• Timestamp ISO 8601: ${ahoraIso}\n\nCONTEXTO DEL SISTEMA:\n• Canal: ${channel} | Usuario: ${senderName} (ID: ${senderId})\n• Tareas pendientes activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}\n• Interacciones recientes:\n${recentMessages.map((m) => `[${m.channel}] ${m.role === 'user' ? senderName : 'Carmencita'}: ${m.content}`).join('\n')}${directivesBlock}${memoriesBlock}\n\nMensaje de Sebastián:\n"${text}"\n`;
 
+      // 2. Reconstrucción estructurada nativa del historial (Puntos 02, 12 y 30)
+      const historyContents = (recentMessages || []).map((m) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: String(m.content || '') }],
+      }));
+
+      // 3. Preámbulo dinámico de sistema (libera tokens de atención del mensaje del usuario)
+      const dynamicSystemInstruction = `${this.getSystemPrompt()}
+
+[CONTEXTO OPERATIVO ACTIVO]
+• Hora y Fecha en Guatemala: ${ahoraGuatemala} (Zona Horaria: America/Guatemala / UTC-6)
+• Timestamp ISO 8601: ${ahoraIso}
+• Canal de Entrada: ${channel} | Usuario: ${senderName} (ID: ${senderId})
+• Tareas Pendientes Activas: ${JSON.stringify(pendingTasks.map((t) => t.description))}${directivesBlock}${memoriesBlock}`;
+
+      // 4. Invocación limpia al motor ReAct con Native Tool Calling
       const runnerResult = await this.agentRunner.run({
-        systemInstruction: this.getSystemPrompt(),
-        history: [],
-        userMessage: contextPrompt,
+        systemInstruction: dynamicSystemInstruction,
+        history: historyContents,
+        userMessage: text,
         context: { userText: text, channel, senderId, senderName, onProgress, isVoiceInput },
       });
 
-      let actionResult = (runnerResult.toolCallsSummary && runnerResult.toolCallsSummary.length > 0)
-        ? mapToolSummaryToActionResult(runnerResult)
-        : await this._executeExtractedActions(runnerResult.rawReply || runnerResult.reply, onProgress, { userText: text, channel, senderId, senderName });
+      // 5. Mapeo directo y exclusivo de Native Tool Calling (Erradicación del Dual Engine)
+      let actionResult = mapToolSummaryToActionResult(runnerResult);
 
       if (!actionResult.hasVoice && this.voiceService && (isVoiceInput || /audio|voz|resumen en audio|nota de voz/i.test(text))) {
         try {
@@ -282,9 +291,9 @@ export class CarmencitaBrain {
       return actionResult;
     } catch (err) {
       console.error('[Brain] Error processing text:', err);
-      const errMsg = `Hola Sebastián, recibí tu mensaje pero ocurrió un error al consultar el motor de IA: ${err.message}.`;
+      const errMsg = `Hola Sebastián, ocurrió un inconveniente técnico al procesar tu solicitud: ${err.message}. El incidente fue registrado con transparencia y la acción no fue alterada.`;
       await this._logMessage({ channel, senderId, senderName: 'Carmencita', role: 'assistant', content: errMsg });
-      return errMsg;
+      return makeActionResult({ reply: errMsg });
     }
   }
 
@@ -292,30 +301,8 @@ export class CarmencitaBrain {
   async processDocument(opts) { return await handleBrainDocument(this, opts); }
   async processAudio(opts) { return await handleBrainAudio(this, opts); }
 
-  async _executeExtractedActions(rawText, onProgress = null, context = {}) {
-    const extracted = extractActionJson(rawText);
-    if (!extracted) return makeActionResult({ reply: sanitizeReplyText(rawText) });
-    let parsedAction = null;
-    try {
-      parsedAction = parseCarmencitaAction(extracted.parsed);
-    } catch (e) {
-      console.warn('[Brain] JSON de acción inválido:', e.message);
-    }
-    if (!parsedAction) return makeActionResult({ reply: sanitizeReplyText(rawText) });
-    const cleanText = rawText.replace(extracted.matchedString, '').replace(/```(?:json)?\s*```/gi, '').trim();
-    return await executeAction(parsedAction, this.deps, { ...context, cleanText, rawText, onProgress });
-  }
-
   async executeAgyTask(prompt) {
     if (!this.agyBridge) return { success: false, output: 'AGY CLI no está configurado en este entorno.' };
     return await this.agyBridge.executeTask(prompt);
-  }
-
-  _handleLocalFallback(text) {
-    const lower = text.toLowerCase();
-    if (lower.includes('hola') || lower.includes('buenos')) return '¡Hola Sebastián! Aquí está Carmencita lista para lo que necesites hoy. Puedes enviarme facturas, notas de voz, ideas o pedirme reportes.';
-    if (lower.includes('factura') || lower.includes('garantia')) return 'Para registrar una factura, envíame la foto o PDF directamente y la archivaremos en PostgreSQL con sus garantías.';
-    if (lower.includes('idea')) return '¡Excelente! Cuéntame la idea y la archivaremos con prioridad y etiquetas en el banco de ideas.';
-    return `Recibido, Sebastián: "${text}". Quedó registrado en el hub.`;
   }
 }

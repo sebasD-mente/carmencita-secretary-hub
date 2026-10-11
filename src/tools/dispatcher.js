@@ -10,7 +10,7 @@ import { GenerateImageActionSchema } from '../validators/actions.schema.js';
 export class ToolDispatcher {
   constructor(deps = {}, options = {}) {
     this.deps = deps || {};
-    this.toolTimeoutMs = options.toolTimeoutMs || 8000;
+    this.toolTimeoutMs = options.toolTimeoutMs || 12000;
   }
 
   isDestructiveAction(toolName, args = {}) {
@@ -80,7 +80,7 @@ export class ToolDispatcher {
     let timer = null;
 
     try {
-      const timeoutLimit = toolName === 'generate_image' ? Math.max(this.toolTimeoutMs, 25000) : this.toolTimeoutMs;
+      const timeoutLimit = toolName === 'generate_image' ? 20000 : this.toolTimeoutMs;
       const timeoutPromise = new Promise((resolve) => {
         timer = setTimeout(() => {
           controller.abort();

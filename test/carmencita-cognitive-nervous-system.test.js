@@ -8,6 +8,7 @@ import { CARMENCITA_TOOL_DECLARATIONS } from '../src/tools/declarations.js';
 import { EmailTriageService, defaultEmailTriageService } from '../src/services/email-triage.service.js';
 import { SchedulerService } from '../src/services/scheduler.service.js';
 import { sanitizeToolResponseForModel, mapToolSummaryToActionResult } from '../src/core/agent-runner.js';
+import { CarmencitaBrain } from '../src/core/brain.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -212,4 +213,139 @@ test('🧠 Suite Coercitiva: Restauración Integral del Sistema Nervioso Cogniti
     assert.equal(actionResult.actionData.stdout, 'load average: 0.12');
   });
 
+  await t.test('8. CarmencitaBrain.processTextMessage pasa historial multi-turno estructurado nativo y preámbulo dinámico', async () => {
+    let capturedHistory = null;
+    let capturedSystemInstruction = null;
+    let capturedUserMessage = null;
+
+    const mockMessages = [
+      { channel: 'telegram', senderId: 'user_1', role: 'user', content: '¿Cuáles son las opciones de stands?' },
+      { channel: 'telegram', senderId: 'user_1', role: 'assistant', content: 'Opción 1: Rústico. Opción 2: Minimalista.' },
+    ];
+
+    const mockPrisma = {
+      messageLog: {
+        create: async () => {},
+        findMany: async () => [...mockMessages].reverse(),
+      },
+    };
+
+    const mockRunner = {
+      run: async (opts) => {
+        capturedHistory = opts.history;
+        capturedSystemInstruction = opts.systemInstruction;
+        capturedUserMessage = opts.userMessage;
+        return { reply: 'La segunda opción es el stand Minimalista.', toolCallsSummary: [] };
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      taskService: { listTasks: async () => [] },
+      agentRunner: mockRunner,
+      ai: { models: { generateContent: async () => {} } },
+    });
+
+    const result = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: 'user_1',
+      senderName: 'Sebastián',
+      text: '¿Y la segunda opción?',
+    });
+
+    assert.ok(Array.isArray(capturedHistory), 'El historial debe ser un arreglo');
+    assert.equal(capturedHistory.length, 2, 'Debe contener los 2 turnos previos');
+    assert.deepEqual(capturedHistory[0], { role: 'user', parts: [{ text: '¿Cuáles son las opciones de stands?' }] });
+    assert.deepEqual(capturedHistory[1], { role: 'model', parts: [{ text: 'Opción 1: Rústico. Opción 2: Minimalista.' }] });
+    assert.ok(capturedSystemInstruction.includes('[CONTEXTO OPERATIVO ACTIVO]'), 'Debe incluir el preámbulo operativo dinámico');
+    assert.ok(capturedSystemInstruction.includes('America/Guatemala'), 'Debe incluir la zona horaria de Guatemala');
+    assert.equal(capturedUserMessage, '¿Y la segunda opción?', 'El userMessage no debe estar aplastado');
+    assert.ok(result.reply.includes('Minimalista'));
+  });
+
+  await t.test('9. CarmencitaBrain.processTextMessage reporta fallos con transparencia radical Zero-Trust', async () => {
+    const loggedMessages = [];
+    const mockPrisma = {
+      messageLog: {
+        create: async ({ data }) => { loggedMessages.push(data); },
+        findMany: async () => [],
+      },
+    };
+
+    const mockFailingRunner = {
+      run: async () => {
+        throw new Error('RESOURCE_EXHAUSTED: Quota exceeded for model gemini-3.8-flash');
+      },
+    };
+
+    const brain = new CarmencitaBrain({
+      prisma: mockPrisma,
+      taskService: { listTasks: async () => [] },
+      agentRunner: mockFailingRunner,
+      ai: { models: { generateContent: async () => {} } },
+    });
+
+    const result = await brain.processTextMessage({
+      channel: 'telegram',
+      senderId: 'user_1',
+      senderName: 'Sebastián',
+      text: 'Genera reporte urgente',
+    });
+
+    assert.ok(result.reply.includes('ocurrió un inconveniente técnico al procesar tu solicitud: RESOURCE_EXHAUSTED'), 'Debe reportar el error técnico real con transparencia');
+    assert.ok(result.reply.includes('El incidente fue registrado con transparencia y la acción no fue alterada'), 'Debe garantizar que la acción no fue alterada');
+    assert.equal(result.hasTask, false, 'Cero confirmaciones falsas de éxito');
+    const assistantLog = loggedMessages.find((m) => m.role === 'assistant');
+    assert.ok(assistantLog, 'Debe registrar el mensaje de error en el log');
+    assert.ok(assistantLog.content.includes('RESOURCE_EXHAUSTED'));
+  });
+
+  await t.test('10. mapToolSummaryToActionResult genera síntesis de respaldo si el LLM no generó reply explicativo', () => {
+    // 1. Calendar
+    const calRes = mapToolSummaryToActionResult({
+      reply: '',
+      toolCallsSummary: [{
+        name: 'manage_calendar',
+        result: { data: { event: { summary: 'Junta de Consejo', startTime: '2026-10-15T10:00:00-06:00' } } },
+      }],
+    });
+    assert.ok(calRes.reply.includes('📅 Evento agendado en Google Calendar: "Junta de Consejo"'));
+
+    // 2. Gmail
+    const gmailRes = mapToolSummaryToActionResult({
+      reply: '   ',
+      toolCallsSummary: [{
+        name: 'search_gmail',
+        result: { data: { emails: [{ id: '1' }, { id: '2' }, { id: '3' }] } },
+      }],
+    });
+    assert.ok(gmailRes.reply.includes('✉️ Se encontraron 3 correos en tu bandeja de Gmail.'));
+
+    // 3. Task
+    const taskRes = mapToolSummaryToActionResult({
+      reply: '',
+      toolCallsSummary: [{
+        name: 'manage_tasks',
+        result: { data: { task: { description: 'Comprar insumos de madera' } } },
+      }],
+    });
+    assert.ok(taskRes.reply.includes('📋 Tarea registrada en tu lista de pendientes: "Comprar insumos de madera".'));
+
+    // 4. Photo
+    const photoRes = mapToolSummaryToActionResult({
+      reply: '',
+      toolCallsSummary: [{
+        name: 'generate_image',
+        result: { data: { filePath: '/tmp/stand.png', fileName: 'stand.png' } },
+      }],
+    });
+    assert.ok(photoRes.reply.includes('🎨 Render visual generado exitosamente'));
+  });
+
+  await t.test('11. ToolDispatcher fija límites de tiempo armónicos (12s herramientas, 20s imágenes)', () => {
+    const dispatcher = new ToolDispatcher();
+    assert.equal(dispatcher.toolTimeoutMs, 12000, 'El timeout por defecto debe ser 12 segundos');
+  });
+
 });
+
