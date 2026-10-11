@@ -87,7 +87,7 @@ export class TelegramAdapter {
 
       if (staged.expiresAt && Date.now() > staged.expiresAt) {
         this.stagedActions.delete(actionId);
-        return ctx.editMessageText('⚠️ Esta acción ha expirado (límite TTL de 15 minutos superado).').catch(() => {});
+        return ctx.editMessageText('⚠️ Esta acción ha expirado (límite TTL de 30 minutos superado).').catch(() => {});
       }
 
       if (actionType === 'cancel') {

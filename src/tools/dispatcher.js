@@ -67,7 +67,7 @@ export class ToolDispatcher {
       const brain = this.deps.brain;
       const stagedPayload = brain?.stageAction
         ? { ...brain.stageAction({ toolName, args, description, senderId: context.senderId }), status: 'staged', requiresConfirmation: true, action: actionType, preview: summary }
-        : { actionId: `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'staged', requiresConfirmation: true, action: actionType, toolName, args, description, preview: summary, createdAt: Date.now(), expiresAt: Date.now() + 900000 };
+        : { actionId: `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'staged', requiresConfirmation: true, action: actionType, toolName, args, description, preview: summary, createdAt: Date.now(), expiresAt: Date.now() + 1800000 };
 
       if (context && Array.isArray(context.stagedActions) && !context.stagedActions.includes(stagedPayload)) {
         context.stagedActions.push(stagedPayload);

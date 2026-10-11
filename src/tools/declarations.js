@@ -71,7 +71,7 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
           description: 'Identificador opcional de un correo específico para leer su cuerpo en detalle.',
         },
       },
-      required: ['query'],
+      required: [],
     },
   },
   {
@@ -82,8 +82,8 @@ export const CARMENCITA_TOOL_DECLARATIONS = [
       properties: {
         action: {
           type: Type.STRING,
-          description: 'Acción a realizar en el Vault: SEARCH, READ, CREATE, UPDATE, APPEND o SYNC.',
-          enum: ['SEARCH', 'READ', 'CREATE', 'UPDATE', 'APPEND', 'SYNC'],
+          description: 'Acción a realizar en el Vault: SEARCH, READ, CREATE, UPDATE, APPEND, SYNC o DELETE.',
+          enum: ['SEARCH', 'READ', 'CREATE', 'UPDATE', 'APPEND', 'SYNC', 'DELETE'],
         },
         title: {
           type: Type.STRING,

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const ObsidianToolSchema = z.object({
-  action: z.enum(['SEARCH', 'READ', 'CREATE', 'UPDATE', 'APPEND', 'SYNC']),
+  action: z.enum(['SEARCH', 'READ', 'CREATE', 'UPDATE', 'APPEND', 'SYNC', 'DELETE', 'DELETE_NOTE']),
   title: z.coerce.string().optional(),
   content: z.coerce.string().optional(),
   folder: z.coerce.string().optional(),

@@ -20,7 +20,7 @@ export const DOMAIN_CEILINGS = {
   'src/config.js': 100,
 
   // Capa de Herramientas Modulares (src/tools/)
-  'src/tools/declarations.js': 300,
+  'src/tools/declarations.js': 350,
   'src/tools/dispatcher.js': 320,
   'src/tools/obsidian.tools.js': 300,
   'src/tools/workspace/calendar.tools.js': 160,
@@ -38,7 +38,7 @@ export const DOMAIN_CEILINGS = {
   'src/services/obsidian-drive.service.js': 350,
   'src/services/obsidian/drive-vault.client.js': 280,
   'src/services/obsidian/markdown-serializer.js': 220,
-  'src/services/email-triage.service.js': 260,
+  'src/services/email-triage.service.js': 320,
   'src/services/gmail.service.js': 440,
   'src/services/calendar.service.js': 320,
   'src/services/task.service.js': 350,

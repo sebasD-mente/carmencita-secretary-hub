@@ -113,7 +113,7 @@ export class CarmencitaBrain {
     }
   }
 
-  stageAction({ toolName, args, description, senderId, ttlMs = 15 * 60 * 1000 }) {
+  stageAction({ toolName, args, description, senderId, ttlMs = 30 * 60 * 1000 }) {
     const actionId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const staged = {
       actionId,
@@ -121,6 +121,7 @@ export class CarmencitaBrain {
       args: args || {},
       description: description || `Ejecutar ${toolName}`,
       senderId: String(senderId || 'default'),
+      isExecuting: false,
       createdAt: Date.now(),
       expiresAt: Date.now() + ttlMs,
     };
@@ -141,16 +142,28 @@ export class CarmencitaBrain {
     }
 
     if (!staged) {
-      throw new Error('Esta acción no existe o ya fue procesada.');
+      throw new Error('Esta acción ha expirado o ya fue procesada.');
+    }
+
+    // Mutex Atómico de Idempotencia (Vector V-02)
+    if (staged.isExecuting) {
+      throw new Error('Esta acción ya se está ejecutando. Por favor espera un momento.');
+    }
+    staged.isExecuting = true;
+
+    // Purga inmediata antes de la ejecución asíncrona para anular segundas pulsaciones
+    if (actionId) {
+      this.stagedActions.delete(actionId);
+    }
+
+    // Validación de pertenencia de usuario (Zero-Trust)
+    const requestSender = String(context.senderId || '');
+    if (requestSender && staged.senderId && staged.senderId !== 'default' && staged.senderId !== requestSender) {
+      throw new Error('Acceso no autorizado: esta acción pertenece a otro usuario de la sesión.');
     }
 
     if (staged.expiresAt && Date.now() > staged.expiresAt) {
-      if (actionId) this.stagedActions.delete(actionId);
-      throw new Error('Esta acción ha expirado (TTL de 15 minutos superado).');
-    }
-
-    if (actionId) {
-      this.stagedActions.delete(actionId);
+      throw new Error('Esta acción ha expirado (TTL de 30 minutos superado).');
     }
 
     const dispatcher = this.toolDispatcher || this.agentRunner?.toolDispatcher;
@@ -194,7 +207,7 @@ export class CarmencitaBrain {
     } catch (err) { console.warn('[Auto-RAG] Error en extracción autónoma de memoria:', err.message); }
   }
 
-  async _resolveRAGContext(queryText) {
+  async _resolveRAGContext(queryText, { onlyDirectives = false } = {}) {
     if (!this.embeddingService) return { directivesBlock: '', memoriesBlock: '' };
     try {
       let directivesBlock = '';
@@ -215,7 +228,7 @@ export class CarmencitaBrain {
       }
 
       // 2. Búsqueda Vectorial Semántica por Afinidad Coseno (excluyendo chunks crudos de OBSIDIAN)
-      if (typeof this.embeddingService.searchSimilarMemories === 'function' && queryText && queryText.trim()) {
+      if (!onlyDirectives && typeof this.embeddingService.searchSimilarMemories === 'function' && queryText && queryText.trim()) {
         tasks.push(
           this.embeddingService.searchSimilarMemories(queryText, { limit: 3, excludeCategory: 'OBSIDIAN', minSimilarity: 0.55 })
             .then((mems) => {
@@ -246,7 +259,7 @@ export class CarmencitaBrain {
     try {
       // 1. Contexto temporal y semántico del sistema
       const { ahoraGuatemala, ahoraIso } = this._getGuatemalaTimestamps();
-      const { directivesBlock, memoriesBlock } = await this._resolveRAGContext(text);
+      const { directivesBlock, memoriesBlock } = await this._resolveRAGContext(text, { onlyDirectives: true });
       const { recentMessages, pendingTasks } = await this._getRecentContext(channel, senderId);
 
       // 2. Reconstrucción estructurada nativa del historial (Puntos 02, 12 y 30)
