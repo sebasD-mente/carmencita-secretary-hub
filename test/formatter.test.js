@@ -77,8 +77,9 @@ test('Suite de Pruebas Unitarias del Formateador de Presentación y Purificació
     assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Chief of Staff'), 'Debe definir el rol de Chief of Staff');
     assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Deco Vintage'), 'Debe incluir el ecosistema Deco Vintage');
     assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('DeKo Labs'), 'Debe incluir el ecosistema DeKo Labs');
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Sebas'), 'Debe incluir apelativos de confianza');
-    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('mi jefe consentido'), 'Debe incluir zalamería reactiva');
+    assert.ok(CARMENCITA_SYSTEM_PROMPT.includes('Sebas'), 'Debe incluir trato respetuoso y conciso Sebas');
+    assert.ok(!CARMENCITA_SYSTEM_PROMPT.includes('mi jefe consentido'), 'Debe erradicar la zalamería mecánica forzada ("mi jefe consentido")');
+    assert.ok(!CARMENCITA_SYSTEM_PROMPT.includes('jefecito lindo'), 'Debe erradicar apelativos empalagosos ("jefecito lindo")');
   });
 
   await t.test('Caso 6: Limpieza para síntesis de voz (formatForVoice)', () => {
@@ -95,5 +96,28 @@ test('Suite de Pruebas Unitarias del Formateador de Presentación y Purificació
     assert.ok(!voiceText.includes('action'), 'Debe remover bloques JSON');
     assert.ok(voiceText.includes('Sebas'), 'Debe preservar el contenido esencial');
     assert.ok(voiceText.includes('Deco Vintage'), 'Debe preservar texto de enlaces');
+  });
+
+  await t.test('Caso 7 (Punto 21): Ley de Aire Visual Inteligente (viñetas compactas con \\n simple y bloques separados con \\n\\n)', () => {
+    const input = 'Resumen de tareas:\n• Tarea 1 completada\n• Tarea 2 en progreso\n• Tarea 3 pendiente\n\nPróximos pasos ejecutivos:\n📌 Coordinar reunión';
+    const output = PresentationFormatter.formatForTelegram(input);
+
+    assert.ok(output.includes('• Tarea 1 completada\n• Tarea 2 en progreso\n• Tarea 3 pendiente'), 'Las viñetas consecutivas deben unirse con salto simple');
+    assert.ok(output.includes('Resumen de tareas:\n\n• Tarea 1 completada'), 'El encabezado y la lista deben separarse con doble salto');
+    assert.ok(output.includes('• Tarea 3 pendiente\n\nPróximos pasos ejecutivos:'), 'La lista y el siguiente bloque deben separarse con doble salto');
+    assert.ok(output.includes('Próximos pasos ejecutivos:\n\n📌 Coordinar reunión'), 'El encabezado y el ítem con emoji deben separarse con doble salto');
+  });
+
+  await t.test('Caso 8 (Punto 37 - Vector V-04): Balanceo Robusto de Tags HTML huérfanos en chunks de Telegram', () => {
+    const unclosedChunk = '<b>Texto en negrita que se corta en <i>cursiva y <code>codigo';
+    const balanced = PresentationFormatter.balanceHtmlTags(unclosedChunk);
+
+    assert.ok(balanced.endsWith('</code></i></b>'), 'Debe cerrar todas las etiquetas abiertas en orden inverso');
+
+    const orphanClosingChunk = 'termina la negrita</b> y texto suelto</i>';
+    const cleaned = PresentationFormatter.balanceHtmlTags(orphanClosingChunk);
+
+    assert.ok(!cleaned.includes('</b>'), 'No debe emitir tags de cierre huérfanos sin tag de apertura');
+    assert.ok(!cleaned.includes('</i>'), 'No debe emitir tags de cierre huérfanos sin tag de apertura');
   });
 });

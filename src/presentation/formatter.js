@@ -8,7 +8,7 @@
  * @param {string} html
  * @returns {string}
  */
-function balanceHtmlTags(html) {
+export function balanceHtmlTags(html) {
   const allowedTags = ['b', 'strong', 'i', 'em', 'u', 's', 'code', 'pre', 'a'];
   const openStack = [];
   const tagRegex = /<\/?([a-zA-Z0-9]+)(?:\s+[^>]*?)?>/g;
@@ -106,9 +106,29 @@ export class PresentationFormatter {
     // 7. Erradicación total de cualquier asterisco residual
     text = text.replace(/\*/g, '');
 
-    // 8. Ley de Aire Visual: asegurar doble salto (\n\n) entre párrafos/elementos
-    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-    text = lines.join('\n\n');
+    // 8. Ley de Aire Visual Inteligente: compactar listas de viñetas y emojis, dobles saltos entre bloques
+    const rawLines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    const formattedBlocks = [];
+    let currentList = [];
+
+    const isListItem = (line) => /^(?:[•\-*]|📁|✉️|📅|📋|📌|🔴|🟢|💼|💳|📊|ℹ️|✅|❌|⚠️)/.test(line);
+
+    for (const line of rawLines) {
+      if (isListItem(line)) {
+        currentList.push(line);
+      } else {
+        if (currentList.length > 0) {
+          formattedBlocks.push(currentList.join('\n'));
+          currentList = [];
+        }
+        formattedBlocks.push(line);
+      }
+    }
+    if (currentList.length > 0) {
+      formattedBlocks.push(currentList.join('\n'));
+    }
+
+    text = formattedBlocks.join('\n\n');
 
     // 9. Restaurar bloques de código protegidos
     inlineCodes.forEach((codeHtml, idx) => {
@@ -120,6 +140,15 @@ export class PresentationFormatter {
 
     // 10. Balanceo y cierre de tags HTML huérfanos
     return balanceHtmlTags(text);
+  }
+
+  /**
+   * Balancea y cierra etiquetas HTML huérfanas soportadas por Telegram.
+   * @param {string} html
+   * @returns {string}
+   */
+  static balanceHtmlTags(html) {
+    return balanceHtmlTags(html);
   }
 
   /**

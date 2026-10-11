@@ -209,10 +209,32 @@ export class AgentRunner {
           // 2. Ejecutar cada herramienta mediante ToolDispatcher (con hard-timeout individual de 8s)
           const responseParts = [];
           for (const call of functionCalls) {
-            const toolResult = await this.toolDispatcher.dispatch(call.name, call.args, {
-              ...context,
-              stagedActions,
-            });
+            let progressTimer = null;
+            if (typeof context?.onProgress === 'function') {
+              const toolMsgs = {
+                manage_drive: 'Revisando archivos en Google Drive...',
+                manage_obsidian_notes: 'Consultando notas en Obsidian Vault...',
+                generate_image: 'Generando diseño visual con Nano Banana...',
+                query_calendar: 'Consultando agenda en Google Calendar...',
+                query_gmail: 'Consultando Gmail...',
+                query_tasks: 'Revisando tareas pendientes...',
+                system_diagnostics: 'Ejecutando diagnóstico...',
+              };
+              const msg = toolMsgs[call.name] || 'Procesando tu solicitud...';
+              progressTimer = setTimeout(() => {
+                context.onProgress(`⏳ ${msg}`).catch(() => {});
+              }, 3500);
+            }
+
+            let toolResult;
+            try {
+              toolResult = await this.toolDispatcher.dispatch(call.name, call.args, {
+                ...context,
+                stagedActions,
+              });
+            } finally {
+              if (progressTimer) clearTimeout(progressTimer);
+            }
 
             toolCallsSummary.push({
               name: call.name,
