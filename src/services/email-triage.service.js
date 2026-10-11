@@ -36,7 +36,9 @@ export class EmailTriageService {
   constructor({ geminiPool = defaultGeminiPool, ai = null, modelName = null } = {}) {
     this.geminiPool = geminiPool;
     this.ai = ai;
-    this.modelName = modelName || config?.ai?.modelName || 'gemini-3.8-flash';
+    // Prioridad: parámetro explícito -> gemini-3.5-flash-lite del pool -> modelo global -> gemini-3.8-flash
+    const defaultFastModel = config?.ai?.modelPool?.find((m) => m.includes('3.5-flash-lite')) || config?.ai?.modelName || 'gemini-3.8-flash';
+    this.modelName = modelName || defaultFastModel;
   }
 
   async classifyEmail({ from = '', to = '', subject = '', snippet = '', bodyText = '' } = {}) {

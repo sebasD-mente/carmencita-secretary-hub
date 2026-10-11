@@ -14,6 +14,7 @@ export const DOMAIN_CEILINGS = {
   'src/core/brain.js': 350,
   'src/core/agent-runner.js': 350,
   'src/core/carmencita.prompt.js': 120,
+  'src/core/prisma.js': 120,
   'src/presentation/formatter.js': 200,
   'src/index.js': 250,
   'src/config.js': 100,

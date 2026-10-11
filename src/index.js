@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { config } from './config.js';
-import { prisma } from './core/prisma.js';
+import { prisma, checkConnection } from './core/prisma.js';
 import { defaultStorageProvider } from './services/storage.provider.js';
 import { documentService } from './services/document.service.js';
 import { taskService } from './services/task.service.js';
@@ -39,10 +39,14 @@ const fastify = Fastify({
 async function main() {
   console.log('🚀 Iniciando Carmencita Secretary Hub (Deko Labs Standard)...');
 
-  // 1. Conexión a Base de Datos Relacional PostgreSQL (Cold Start Prevention)
+  // 1. Conexión y Pre-flight a Base de Datos Relacional PostgreSQL
   try {
-    await prisma.$connect();
-    console.log('✅ [Database] Conexión establecida con PostgreSQL.');
+    const dbCheck = await checkConnection();
+    if (dbCheck.ok) {
+      console.log('✅ [Database] Conexión y pre-flight SELECT 1 establecidos con PostgreSQL.');
+    } else {
+      console.warn('⚠️ [Database] Pre-flight diferido a PostgreSQL:', dbCheck.error);
+    }
   } catch (err) {
     console.warn('⚠️ [Database] Conexión diferida a PostgreSQL:', err.message);
   }

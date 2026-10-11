@@ -50,7 +50,7 @@ export const config = {
       .map((k) => k.trim())
       .filter(Boolean),
     modelName: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
-    modelPool: (process.env.GEMINI_MODEL_POOL || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest')
+    modelPool: (process.env.GEMINI_MODEL_POOL || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash-lite')
       .split(',')
       .map((m) => m.trim())
       .filter(Boolean),

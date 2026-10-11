@@ -49,6 +49,71 @@ export function registerRoutes(fastify, { brain, documentService, taskService, i
     };
   });
 
+  // 1.1 Deep Health Check Probe para Dokploy Container Auto-Healing (/healthz)
+  fastify.get('/healthz', async (request, reply) => {
+    const checks = {
+      database: false,
+      telegram: false,
+      aiPool: false,
+      timestamp: new Date().toISOString(),
+    };
+
+    // 1. Verificar PostgreSQL con SELECT 1
+    try {
+      if (prisma?.$queryRaw) {
+        await prisma.$queryRaw`SELECT 1`;
+        checks.database = true;
+      }
+    } catch (err) {
+      checks.databaseError = err.message;
+    }
+
+    // 2. Verificar Telegram Bot
+    try {
+      if (telegramAdapter?.bot?.api?.getMe) {
+        await telegramAdapter.bot.api.getMe();
+        checks.telegram = true;
+      } else if (telegramAdapter?.isRunning) {
+        checks.telegram = true;
+      }
+    } catch (err) {
+      checks.telegramError = err.message;
+    }
+
+    // 3. Verificar Gemini Pool
+    try {
+      const geminiPool = brain?.geminiPool || brain?.deps?.geminiPool;
+      if (geminiPool) {
+        checks.aiPool = typeof geminiPool.hasAvailableClient === 'function'
+          ? geminiPool.hasAvailableClient()
+          : (typeof geminiPool.getClient === 'function' && Boolean(geminiPool.getClient()));
+      } else {
+        checks.aiPool = Boolean(config.ai?.geminiApiKey || config.ai?.geminiApiKeys?.length);
+      }
+    } catch (err) {
+      checks.aiPoolError = err.message;
+    }
+
+    // Si la base de datos no responde, el contenedor está degradado
+    const isDegraded = !checks.database;
+
+    if (isDegraded) {
+      return reply.code(503).send({
+        status: 'degraded',
+        healthy: false,
+        service: 'carmencita-secretary-hub',
+        checks,
+      });
+    }
+
+    return reply.code(200).send({
+      status: 'ok',
+      healthy: true,
+      service: 'carmencita-secretary-hub',
+      checks,
+    });
+  });
+
   // 2. Webhook para Evolution API (WhatsApp) con validación de secreto
   fastify.post('/webhooks/whatsapp', async (request, reply) => {
     // Verificación de autenticidad del webhook
