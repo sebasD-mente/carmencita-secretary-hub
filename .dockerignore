@@ -1,0 +1,45 @@
+# ========================================================
+# CARMENCITA SECRETARY HUB - DOCKER IGNORE (DEKO LABS DEVSECOPS)
+# ========================================================
+
+# Dependencias locales y logs de compilación
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Secretos y variables de entorno (Protocolo Zero-Trust)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+
+# Datos locales, bóvedas temporales y reportes
+data/
+reports/
+vault/
+*.tmp
+*.log
+
+# Git, Agentes e Infraestructura local
+.git/
+.gitignore
+.agents/
+.gemini/
+
+# Testing, Cobertura y Benchmarks
+test/
+tests/
+coverage/
+.nyc_output/
+
+# Archivos del Sistema Operativo y Editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
