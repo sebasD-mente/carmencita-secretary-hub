@@ -109,20 +109,24 @@ if (fs.existsSync(securityTestPath)) {
 
 // 6. Suite de Pruebas Unitarias
 if (!skipUnit) {
-  const packageJsonPath = path.join(rootDir, 'package.json');
-  if (fs.existsSync(packageJsonPath)) {
-    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-    const isWin = process.platform === 'win32';
-    const npmCmd = isWin ? 'npm.cmd' : 'npm';
+  const testDir = path.join(rootDir, 'test');
+  let testFiles = [];
+  if (fs.existsSync(testDir)) {
+    testFiles = fs.readdirSync(testDir)
+      .filter((file) => file.endsWith('.test.js'))
+      .map((file) => path.join('test', file).replace(/\\/g, '/'));
+  }
 
-    if (pkg.scripts && pkg.scripts['test:unit']) {
-      runStep('6/6: Suite de Pruebas Unitarias (test:unit)', npmCmd, ['run', 'test:unit'], { shell: isWin });
-      results.tests = 'PASS';
-    } else if (pkg.scripts && pkg.scripts.test && !pkg.scripts.test.includes('audit-harness.js')) {
-      console.log('ℹ️ Ejecutando suite declarada en npm test...');
-      runStep('6/6: Suite de Pruebas Unitarias (npm test)', npmCmd, ['test'], { shell: isWin });
-      results.tests = 'PASS';
-    }
+  if (testFiles.length > 0) {
+    runStep(`6/6: Suite de Pruebas Unitarias (${testFiles.length} suites)`, process.execPath, [
+      '--test',
+      '--test-concurrency=1',
+      ...testFiles,
+    ]);
+    results.tests = 'PASS';
+  } else {
+    console.warn('⚠️ No se encontraron archivos de prueba en test/. Omitiendo.');
+    results.tests = 'SKIPPED';
   }
 } else {
   console.log('⏩ [Flag --skip-unit activa] Omitiendo suite unitaria extendida.');
