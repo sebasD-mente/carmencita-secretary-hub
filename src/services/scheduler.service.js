@@ -375,9 +375,11 @@ export class SchedulerService {
         if (!emailBody) emailBody = m.snippet || m.subject || '';
 
         let agentReply = '';
+        const rawOwner = config.ownerEmail || process.env.OWNER_EMAIL || m.from || 'owner@internal';
+        const ownerEmail = (rawOwner.match(/<([^>]+)>/)?.[1] || rawOwner).trim();
         if (this.brain?.processTextMessage) {
           try {
-            const res = await this.brain.processTextMessage({ channel: 'email', senderId: 'sebasjimenez0330@gmail.com', senderName: 'Sebastián Jiménez', text: emailBody });
+            const res = await this.brain.processTextMessage({ channel: 'email', senderId: ownerEmail, senderName: 'Sebastián Jiménez', text: emailBody });
             agentReply = typeof res === 'string' ? res : (res?.reply || res?.text || '');
           } catch {
             try {
@@ -393,7 +395,7 @@ export class SchedulerService {
 
         if (typeof this.gmailService.sendEmail === 'function') {
           try {
-            await this.gmailService.sendEmail({ to: 'sebasjimenez0330@gmail.com', subject: `Carmencita Comunica: Re: ${m.subject || 'Directiva de Emergencia'}`, bodyText: agentReply });
+            await this.gmailService.sendEmail({ to: ownerEmail, subject: `Carmencita Comunica: Re: ${m.subject || 'Directiva de Emergencia'}`, bodyText: agentReply });
           } catch (sendErr) {
             console.error('[Scheduler] Error enviando respuesta a correo de emergencia:', sendErr.message);
           }
