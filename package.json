@@ -7,8 +7,13 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node scripts/audit-monoliths.js && node --test --test-concurrency=1",
-    "harness:check": "node scripts/audit-monoliths.js",
+    "test": "node scripts/audit-harness.js",
+    "test:unit": "node --test --test-concurrency=1 test tests",
+    "test:security": "node --test tests/security/zero-trust.test.js",
+    "audit:secrets": "node scripts/audit-secrets.js",
+    "audit:syntax": "node scripts/audit-syntax.js",
+    "audit:monoliths": "node scripts/audit-monoliths.js",
+    "harness:check": "node scripts/audit-harness.js",
     "sync:obsidian": "node scripts/sync-obsidian-rag.js",
     "verify:prod": "node scripts/verify-prod.js"
   },
