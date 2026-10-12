@@ -258,12 +258,12 @@ test('🧠 Suite Coercitiva: Motor de Triaje Cognitivo Gmail, Radar VIP y Canal 
     const now = new Date('2026-10-10T11:00:00-06:00');
     const result = await scheduler.checkInboxWatchdog(now, true);
 
-    // Solo los 2 prioritarios deben ser alertados y registrados
+    // Los 2 prioritarios se alertan; los 3 se persisten en DB (2 prioritarios + 1 ruido registrado silenciosamente)
     assert.equal(result.length, 2);
-    assert.equal(notifiedDb.length, 2);
+    assert.equal(notifiedDb.length, 3);
     assert.ok(scheduler.notifiedEmailIds.has('mail_google_01'));
     assert.ok(scheduler.notifiedEmailIds.has('mail_bi_02'));
-    assert.ok(!scheduler.notifiedEmailIds.has('mail_spam_03'));
+    assert.ok(scheduler.notifiedEmailIds.has('mail_spam_03'));
 
     // Se emitió exactamente 1 mensaje consolidado a Telegram (Batching) con síntesis ejecutiva
     assert.equal(capturedTg.length, 1);
@@ -391,21 +391,21 @@ test('🧠 Suite Coercitiva: Motor de Triaje Cognitivo Gmail, Radar VIP y Canal 
       },
     };
 
-    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const thirtyHoursAgo = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
     const oldEmails = [
       {
         id: 'mail_old_apple_receipt',
         from: 'Apple <no_reply@email.apple.com>',
         subject: 'Recibo antiguo de suscripción',
         snippet: 'Factura del 9 de octubre.',
-        date: threeHoursAgo,
+        date: thirtyHoursAgo,
       },
       {
         id: 'mail_old_gcp_bill',
         from: 'Google Cloud Billing <billing@google.com>',
         subject: 'Resumen de facturación de hace 2 días',
         snippet: 'Resumen mensual.',
-        date: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+        date: new Date(Date.now() - 60 * 60 * 60 * 1000).toISOString(),
       },
     ];
 

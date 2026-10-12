@@ -110,7 +110,7 @@ test('🧠 Suite Coercitiva: Restauración Integral del Sistema Nervioso Cogniti
     );
   });
 
-  await t.test('5. SchedulerService no descarta correos de infraestructura o financieros de más de 2 horas (amplía a 24h)', async () => {
+  await t.test('5. SchedulerService no descarta correos de infraestructura o financieros de más de 2 horas (amplía a 48h)', async () => {
     const capturedTg = [];
     const mockTelegram = {
       sendMessage: async (chatId, text) => {
@@ -119,10 +119,10 @@ test('🧠 Suite Coercitiva: Restauración Integral del Sistema Nervioso Cogniti
     };
 
     const now = new Date('2026-10-11T10:00:00-06:00');
-    // Correo de hace 5 horas (fuera de la ventana de 2h pero dentro de 24h)
+    // Correo de hace 5 horas (fuera de la ventana de 2h pero dentro de 48h)
     const fiveHoursAgo = new Date(now.getTime() - 5 * 60 * 60 * 1000).toISOString();
-    // Correo de hace 30 horas (fuera de la ventana de 24h)
-    const thirtyHoursAgo = new Date(now.getTime() - 30 * 60 * 60 * 1000).toISOString();
+    // Correo de hace 60 horas (fuera de la ventana de 48h de Nivel 1)
+    const sixtyHoursAgo = new Date(now.getTime() - 60 * 60 * 60 * 1000).toISOString();
 
     const incomingEmails = [
       {
@@ -142,9 +142,9 @@ test('🧠 Suite Coercitiva: Restauración Integral del Sistema Nervioso Cogniti
       {
         id: 'mail_ancient_infra',
         from: 'Google Cloud Platform <google-noreply@google.com>',
-        subject: 'Alerta obsoleta de hace 30 horas',
+        subject: 'Alerta obsoleta de hace 60 horas',
         snippet: 'Aviso anterior.',
-        date: thirtyHoursAgo,
+        date: sixtyHoursAgo,
       },
     ];
 
@@ -168,11 +168,11 @@ test('🧠 Suite Coercitiva: Restauración Integral del Sistema Nervioso Cogniti
     const result = await scheduler.checkInboxWatchdog(now, true);
 
     // Los 2 correos críticos de 5 horas de antigüedad deben ser procesados y alertados
-    assert.equal(result.length, 2, 'Los 2 correos críticos (<24h) deben ser alertados');
+    assert.equal(result.length, 2, 'Los 2 correos críticos (<48h) deben ser alertados');
     assert.equal(capturedTg.length, 1, 'Debe despachar 1 mensaje consolidado a Telegram');
     assert.ok(scheduler.notifiedEmailIds.has('mail_infra_spend_alert'), 'mail_infra_spend_alert debe estar notificado');
     assert.ok(scheduler.notifiedEmailIds.has('mail_bi_transfer'), 'mail_bi_transfer debe estar notificado');
-    // El correo de 30 horas debe ser registrado silenciosamente y descartado
+    // El correo de 60 horas debe ser registrado silenciosamente y descartado
     assert.ok(scheduler.notifiedEmailIds.has('mail_ancient_infra'), 'mail_ancient_infra debe ser registrado silenciosamente');
   });
 
