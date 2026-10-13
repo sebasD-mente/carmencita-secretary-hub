@@ -108,7 +108,7 @@ test('🛡️ ESCUADRÓN VALKYRIA — CERTIFICACIÓN SUPREMA 10/10 [DEKO-LABS-EN
 
   await t.test('8. Escenario Oro 8 (Formateo Telegram): Viñetas compactas y balanceo de tags', () => {
     const text = '• Item 1\n• Item 2\n\n<b>Negrita';
-    const formatted = PresentationFormatter.format(text);
+    const formatted = PresentationFormatter.formatForTelegram(text);
     assert.ok(formatted.includes('• Item 1\n• Item 2'));
     assert.ok(formatted.includes('<b>Negrita</b>') || formatted.includes('<b>Negrita'));
   });

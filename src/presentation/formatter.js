@@ -54,14 +54,6 @@ export function balanceHtmlTags(html) {
 }
 
 export class PresentationFormatter {
-  /**
-   * Alias de conveniencia para formatForTelegram
-   * @param {string} rawText
-   * @returns {string}
-   */
-  static format(rawText) {
-    return PresentationFormatter.formatForTelegram(rawText);
-  }
 
   /**
    * Formatea texto para Telegram:
