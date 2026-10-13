@@ -107,26 +107,43 @@ if (fs.existsSync(securityTestPath)) {
   results.security = 'SKIPPED';
 }
 
-// 6. Suite de Pruebas Unitarias
+// 6. Suite de Pruebas Unitarias Fail-Fast
 if (!skipUnit) {
-  const testDir = path.join(rootDir, 'test');
-  let testFiles = [];
-  if (fs.existsSync(testDir)) {
-    testFiles = fs.readdirSync(testDir)
-      .filter((file) => file.endsWith('.test.js'))
-      .map((file) => path.join('test', file).replace(/\\/g, '/'));
-  }
+  let pkg = {};
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf-8'));
+  } catch (e) {}
 
-  if (testFiles.length > 0) {
-    runStep(`6/6: Suite de Pruebas Unitarias (${testFiles.length} suites)`, process.execPath, [
-      '--test',
-      '--test-concurrency=1',
-      ...testFiles,
-    ]);
+  if (pkg.scripts && pkg.scripts['test:unit']) {
+    runStep('6/6: Suite de Pruebas Unitarias (npm run test:unit)', 'npm', ['run', 'test:unit']);
     results.tests = 'PASS';
   } else {
-    console.warn('⚠️ No se encontraron archivos de prueba en test/. Omitiendo.');
-    results.tests = 'SKIPPED';
+    const candidateDirs = ['test', 'tests'];
+    let testFiles = [];
+    for (const cDir of candidateDirs) {
+      const fullDir = path.join(rootDir, cDir);
+      if (fs.existsSync(fullDir)) {
+        const found = fs.readdirSync(fullDir)
+          .filter((file) => file.endsWith('.test.js'))
+          .map((file) => path.join(cDir, file).replace(/\\/g, '/'));
+        testFiles.push(...found);
+      }
+    }
+
+    // Excluir zero-trust para no duplicar la ejecución de la fase 5
+    testFiles = testFiles.filter((f) => !f.includes('zero-trust'));
+
+    if (testFiles.length > 0) {
+      runStep(`6/6: Suite de Pruebas Unitarias (${testFiles.length} suites)`, process.execPath, [
+        '--test',
+        '--test-concurrency=1',
+        ...testFiles,
+      ]);
+      results.tests = 'PASS';
+    } else {
+      console.warn('⚠️ No se encontraron suites unitarias adicionales. Omitiendo.');
+      results.tests = 'SKIPPED';
+    }
   }
 } else {
   console.log('⏩ [Flag --skip-unit activa] Omitiendo suite unitaria extendida.');
