@@ -49,9 +49,8 @@ export class CalendarService {
     calendarId = 'primary', timeZone = 'America/Guatemala', checkExisting = true,
   }) {
     const calendar = await this._getCalendarClient();
-    if (!calendar) {
-      throw new Error('Google Calendar no está configurado (falta GOOGLE_REFRESH_TOKEN o cliente OAuth).');
-    }
+    if (!calendar) throw new Error('Google Calendar no está configurado (falta GOOGLE_REFRESH_TOKEN o cliente OAuth).');
+
 
     const startIso = toGuatemalaIso(startDateTime, timeZone);
     let endIso = endDateTime ? toGuatemalaIso(endDateTime, timeZone) : null;
@@ -126,9 +125,8 @@ export class CalendarService {
     excludeBirthdays = true,
   } = {}) {
     const calendar = await this._getCalendarClient();
-    if (!calendar) {
-      return [];
-    }
+    if (!calendar) return [];
+
 
     const listParams = {
       calendarId,
@@ -171,9 +169,8 @@ export class CalendarService {
     timeZone = 'America/Guatemala',
   }) {
     const calendar = await this._getCalendarClient();
-    if (!calendar) {
-      return [];
-    }
+    if (!calendar) return [];
+
 
     const timeMin = new Date(startDate).toISOString();
     const timeMax = new Date(endDate).toISOString();
@@ -218,10 +215,7 @@ export class CalendarService {
     const endDate = new Date(Date.UTC(targetYear, targetMonth, lastDay, 29, 59, 59, 999));
 
     const events = await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
-    if (excludeBirthdays) {
-      return events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || ''));
-    }
-    return events;
+    return excludeBirthdays ? events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || '')) : events;
   }
 
   async getTodayEvents({ calendarId = 'primary', timeZone = 'America/Guatemala', excludeBirthdays = true } = {}) {
@@ -237,6 +231,30 @@ export class CalendarService {
     const startDate = new Date(`${parts}T00:00:00-06:00`), endDate = new Date(`${parts}T23:59:59.999-06:00`);
     const events = await this.getEventsForDateRange({ startDate, endDate, calendarId, timeZone });
     return excludeBirthdays ? events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || '')) : events;
+  }
+
+  async listEvents({
+    timeMin = null,
+    timeMax = null,
+    range = null,
+    maxResults = 50,
+    calendarId = 'primary',
+    timeZone = 'America/Guatemala',
+    excludeBirthdays = true,
+  } = {}) {
+    const normRange = String(range || '').toUpperCase().trim();
+    if (normRange === 'TODAY') return this.getTodayEvents({ calendarId, timeZone, excludeBirthdays });
+    if (normRange === 'TOMORROW') return this.getTomorrowEvents({ calendarId, timeZone, excludeBirthdays });
+    if (normRange === 'THIS_MONTH' || normRange === 'MONTH') return this.getMonthEvents({ calendarId, timeZone, excludeBirthdays });
+
+    if (timeMin && timeMax) {
+      const endStr = typeof timeMax === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(timeMax.trim()) ? `${timeMax.trim()}T23:59:59.999-06:00` : timeMax;
+      const events = await this.getEventsForDateRange({ startDate: timeMin, endDate: endStr, calendarId, timeZone });
+      return excludeBirthdays ? events.filter((e) => e.eventType !== 'birthday' && !/cumpleaños/i.test(e.summary || '')) : events;
+    }
+
+    const tMin = timeMin ? (typeof timeMin === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(timeMin.trim()) ? `${timeMin.trim()}T00:00:00-06:00` : timeMin) : new Date().toISOString();
+    return this.listUpcomingEvents({ maxResults, calendarId, timeMin: tMin, timeMax, excludeBirthdays });
   }
 
   async rescheduleEvent({ eventId = null, query = null, newStartDateTime, newEndDateTime = null, calendarId = 'primary', timeZone = 'America/Guatemala' }) {
@@ -262,10 +280,7 @@ export class CalendarService {
     const res = await calendar.events.patch({
       calendarId,
       eventId: targetEventId,
-      requestBody: {
-        start: { dateTime: startIso, timeZone },
-        end: { dateTime: endIso, timeZone },
-      },
+      requestBody: { start: { dateTime: startIso, timeZone }, end: { dateTime: endIso, timeZone } },
     });
 
     return {

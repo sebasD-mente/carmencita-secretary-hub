@@ -44,12 +44,7 @@ export class ToolDispatcher {
     }
 
     if (!validation.valid) {
-      return {
-        status: 'error',
-        reason: 'INVALID_ARGUMENTS',
-        message: 'Los argumentos suministrados no cumplen con el esquema requerido. Corrige los parámetros en el siguiente turno.',
-        details: validation.error,
-      };
+      return { status: 'error', reason: 'INVALID_ARGUMENTS', message: 'Los argumentos suministrados no cumplen con el esquema requerido. Corrige los parámetros en el siguiente turno.', details: validation.error };
     }
 
     const args = validation.data;
@@ -144,7 +139,12 @@ export class ToolDispatcher {
     if (!service) throw new Error('Servicio de Google Calendar no disponible.');
     const action = String(args.action || '').toUpperCase();
     if (action === 'CREATE') return { success: true, data: { action, event: await service.createEvent({ summary: args.summary, startDateTime: args.startTime, endDateTime: args.endTime, location: args.location }) } };
-    if (action === 'LIST') return { success: true, data: { action, events: await service.listEvents({ timeMin: args.timeMin, timeMax: args.timeMax, range: args.range }) } };
+    if (action === 'LIST') {
+      const timeMin = args.timeMin || args.startTime || args.startDate;
+      const timeMax = args.timeMax || args.endTime || args.endDate;
+      const events = await service.listEvents({ timeMin, timeMax, range: args.range, maxResults: args.maxResults });
+      return { success: true, data: { action, count: events?.length || 0, events } };
+    }
     if (action === 'RESCHEDULE') return { success: true, data: { action, event: await service.rescheduleEvent({ eventId: args.eventId, newStartDateTime: args.startTime, newEndDateTime: args.endTime }) } };
     if (action === 'CANCEL') return { success: true, data: { action, result: await service.cancelEvent({ eventId: args.eventId, summary: args.summary }) } };
     throw new Error(`Acción no soportada en calendar: ${action}`);

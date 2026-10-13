@@ -5,6 +5,8 @@ export const CalendarToolSchema = z.object({
   summary: z.coerce.string().optional(),
   startTime: z.coerce.string().optional(),
   endTime: z.coerce.string().optional(),
+  startDate: z.coerce.string().optional(),
+  endDate: z.coerce.string().optional(),
   startDateTime: z.coerce.string().optional(),
   endDateTime: z.coerce.string().optional(),
   timeMin: z.coerce.string().optional(),
@@ -13,4 +15,5 @@ export const CalendarToolSchema = z.object({
   location: z.coerce.string().optional(),
   description: z.coerce.string().optional(),
   range: z.coerce.string().optional(),
+  maxResults: z.coerce.number().optional(),
 });

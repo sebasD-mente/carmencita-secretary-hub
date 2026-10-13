@@ -9,6 +9,9 @@ import {
   handleContactsAction,
 } from '../src/tools/workspace.tools.js';
 import { CarmencitaBrain } from '../src/core/brain.js';
+import { CalendarService } from '../src/services/calendar.service.js';
+import { ToolDispatcher } from '../src/tools/dispatcher.js';
+
 
 test('🏛️ Workspace Modular & RAG Concurrente — Suite Coercitiva [DEKO-CARMEN-044]', async (t) => {
   // 1. Exportación e integridad de formatEventDates y los 4 handlers modulares
@@ -165,4 +168,56 @@ test('🏛️ Workspace Modular & RAG Concurrente — Suite Coercitiva [DEKO-CAR
     // Demostración empírica de concurrencia: si corrieran en serie tardarían >= 40ms; en paralelo tardan < 39ms
     assert.ok(elapsed < 39, `Debieron ejecutarse concurrentemente en paralelo (elapsed: ${elapsed}ms)`);
   });
+
+  // 4. CalendarService.listEvents y ToolDispatcher normalización de alias para acción LIST
+  await t.test('4. CalendarService.listEvents y ToolDispatcher manejan acción LIST con rangos y alias', async () => {
+    let listCallParams = null;
+    const mockCalendarClient = {
+      events: {
+        list: async (params) => {
+          listCallParams = params;
+          return {
+            data: {
+              items: [
+                {
+                  id: 'cal_event_oct',
+                  summary: 'Feria de Diseño 2026',
+                  start: { dateTime: '2026-10-20T10:00:00-06:00' },
+                  end: { dateTime: '2026-10-20T12:00:00-06:00' },
+                  location: 'Ciudad de Guatemala',
+                },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const calendarService = new CalendarService({ calendarClient: mockCalendarClient });
+
+    // Invocación directa a calendarService.listEvents con rango explícito
+    const events = await calendarService.listEvents({
+      timeMin: '2026-10-01',
+      timeMax: '2027-02-28',
+    });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].id, 'cal_event_oct');
+    assert.ok(listCallParams.timeMin.includes('2026-10-01'));
+    assert.ok(listCallParams.timeMax.includes('2027-03-01') || listCallParams.timeMax.includes('2027-02-28'));
+
+    // Invocación a través de ToolDispatcher con alias startDate/endDate
+    const dispatcher = new ToolDispatcher({ calendarService });
+    const dispatchResult = await dispatcher.dispatch('manage_calendar', {
+      action: 'LIST',
+      startDate: '2026-10-01',
+      endDate: '2027-02-28',
+    });
+
+    assert.equal(dispatchResult.success, true);
+    assert.equal(dispatchResult.data.action, 'LIST');
+    assert.equal(dispatchResult.data.count, 1);
+    assert.equal(dispatchResult.data.events.length, 1);
+    assert.equal(dispatchResult.data.events[0].summary, 'Feria de Diseño 2026');
+  });
 });
+
