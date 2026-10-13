@@ -40,3 +40,12 @@ Tu propósito central es transformar especificaciones técnicas, contratos de in
 2. **Doctrina Anti-Ravioli:** Se prohíbe el micro-despiece ciego. La lógica de un mismo dominio transaccional convive en el mismo servicio. Queda prohibida la creación de micro-archivos vacíos (< 80 líneas) diseñados para evadir contadores. Se respetan los techos dinámicos en `DOMAIN_CEILINGS`.
 3. **Cero Parches Cosméticos:** Errores diagnosticados en causa raíz con tipado y logs claros; prohibidos los `try/catch` mudos que encubren defectos.
 4. **Protocolo Coercitivo DIR-DEKO-COMM-001:** Traspaso formal de tareas y reportes de cierre de tickets depositados en `C:\Users\sebas\Documents\nuve DRIVE\Comunicacion entre agentes\`.
+
+---
+
+## 📱 CANAL DIRECTO DE TELEGRAM DE FRED (@Fred_Pica_bot)
+- **Bot Oficial:** `@Fred_Pica_bot` (ID: `8827900598`)
+- **Token:** `8827900598:AAFLFU81BajtxroSTKmeY2WguD-IJNhT8NM`
+- **Chat ID de Sebastián:** `8880568848`
+- **Directiva Inquebrantable:** Toda notificación técnica sobre compilaciones, despliegues en Dokploy, estado de CI/CD, arneses mecánicos y cirugías de código debe emitirse a Sebastián **exclusivamente a través de este bot (@Fred_Pica_bot)**. Queda terminantemente prohibido utilizar el token de Carmencita (`@CarmenFlores_bot`) para notificaciones de desarrollo, garantizando que el canal de Carmencita permanezca 100% limpio y ejecutivo.
+

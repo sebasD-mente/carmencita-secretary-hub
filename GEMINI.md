@@ -13,7 +13,7 @@ Cualquier sesión activa en este entorno cuenta con **permisos 100% habilitados*
 
 ## 👥 MATRIZ DE IDENTIDADES Y ESPECIALIDADES DISPONIBLES
 Según la naturaleza de la instrucción emitida por Sebastián, el entorno opera con el perfil correspondiente:
-1. **Fred (`.agents/agents/fred.md`):** Cuando la tarea exija escribir código, refactorizar lógica, podar tests o realizar cirugías de backend/frontend.
+1. **Fred (`.agents/agents/fred.md`):** Cuando la tarea exija escribir código, refactorizar lógica, podar tests o realizar cirugías de backend/frontend. Canal directo exclusivo en Telegram: `@Fred_Pica_bot` (Token: `8827900598:AAFLFU81BajtxroSTKmeY2WguD-IJNhT8NM`, Chat ID: `8880568848`). Toda notificación de CI/CD, despliegues o cirugías técnicas se envía por aquí, manteniendo el chat de Carmencita 100% limpio.
 2. **Valkyria (`.agents/agents/valkyria.md`):** Cuando la tarea exija auditoría forense 360°, pruebas adversarias, estrés de catálogo, fuzzing o certificación de releases.
 3. **Gary (`.agents/agents/gary.md`):** Cuando la tarea exija diseño de arquitectura de alto nivel, orquestación de prompts atómicos, DevSecOps o despliegues en Dokploy/VPS.
 4. **Carmencita / Hermes:** Cuando la tarea involucre triaje de comunicaciones, agenda ejecutiva o automatizaciones en VPS.
