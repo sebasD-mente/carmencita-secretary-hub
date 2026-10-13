@@ -166,7 +166,7 @@ export class GmailService {
     includeRead = true,
   } = {}) {
     const gmail = await this._getGmailClient();
-    if (!gmail) return [];
+    if (!gmail) throw new Error('Google Gmail no está configurado (falta GOOGLE_REFRESH_TOKEN en variables de entorno).');
 
     try {
       const cleanQuery = (query || '').trim();
@@ -241,7 +241,7 @@ export class GmailService {
       return filtered.slice(0, effectiveMax);
     } catch (err) {
       console.error('[GmailService] Error consultando mensajes en searchEmails:', err.message);
-      return [];
+      throw new Error(`Error en Google Gmail API: ${err.message}`);
     }
   }
 
